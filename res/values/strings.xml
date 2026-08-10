@@ -417,6 +417,16 @@
     <string name="action_call">Make a call</string>
     <!-- The hint text shown in the message compose input box prompting the user to send a message -->
     <string name="compose_message_view_hint_text">Send message</string>
+    <!-- The hint text shown in the message compose input box when RCS is available -->
+    <string name="compose_message_view_hint_text_rcs">RCS message</string>
+    <!-- RCS Chat settings screen title -->
+    <string name="rcs_settings_title">RCS Chat Features</string>
+    <string name="rcs_settings_enable_title">Enable RCS Chat</string>
+    <string name="rcs_settings_enable_summary">Use Wi-Fi or cellular data for rich messaging</string>
+    <string name="rcs_settings_status_title">Connection Status</string>
+    <string name="rcs_status_connected">Connected</string>
+    <string name="rcs_status_connecting">Connecting / Provisioning...</string>
+    <string name="rcs_status_disconnected">Disconnected</string>
     <!-- The hint text shown in the message compose input box prompting the user to send a message when there are multiple SIMs. -->
     <string name="compose_message_view_hint_text_multi_sim">Send message&lt;br/&gt;&lt;small&gt;from <xliff:g id="sim_name">%s</xliff:g>&lt;/small&gt;</string>
     <!-- The hint text shown in the message compose input box when photo(s) is attached -->

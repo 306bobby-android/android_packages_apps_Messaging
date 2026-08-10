@@ -201,6 +201,14 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".ui.appsettings.RcsSettingsActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:label="@string/rcs_settings_title"
+            android:parentActivityName="com.android.messaging.ui.appsettings.SettingsActivity"
+            android:screenOrientation="user"
+            android:theme="@style/BugleTheme.SettingsActivity" />
+
         <!-- Handles sharing intent -->
         <activity
             android:name=".ui.conversationlist.ShareIntentActivity"
@@ -328,6 +336,15 @@
             </intent-filter>
             <intent-filter android:priority="2147483647">
                 <action android:name="android.provider.Telephony.MMS_DOWNLOADED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".rcs.acs.AcsSmsReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter android:priority="999">
+                <action android:name="android.provider.Telephony.SMS_RECEIVED" />
             </intent-filter>
         </receiver>
 

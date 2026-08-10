@@ -58,6 +58,7 @@ import com.android.messaging.datamodel.data.DraftMessageData.DraftMessageDataLis
 import com.android.messaging.datamodel.data.MessageData;
 import com.android.messaging.datamodel.data.MessagePartData;
 import com.android.messaging.datamodel.data.ParticipantData;
+import com.android.messaging.rcs.RcsManager;
 import com.android.messaging.datamodel.data.PendingAttachmentData;
 import com.android.messaging.datamodel.data.SubscriptionListData.SubscriptionListEntry;
 import com.android.messaging.sms.MmsConfig;
@@ -728,15 +729,20 @@ public class ComposeMessageView extends LinearLayout
         // Update the text hint on the message box depending on the attachment type.
         final int attachmentCount = attachments.size();
         if (attachmentCount == 0) {
-            final SubscriptionListEntry subscriptionListEntry =
-                    mConversationDataModel.getData().getSubscriptionEntryForSelfParticipant(
-                            mBinding.getData().getSelfId(), false /* excludeDefault */);
-            if (subscriptionListEntry == null) {
-                mComposeEditText.setHint(R.string.compose_message_view_hint_text);
+            final boolean isRcs = RcsManager.getInstance(getContext()).isRcsAvailable();
+            if (isRcs) {
+                mComposeEditText.setHint(R.string.compose_message_view_hint_text_rcs);
             } else {
-                mComposeEditText.setHint(Html.fromHtml(getResources().getString(
-                        R.string.compose_message_view_hint_text_multi_sim,
-                        subscriptionListEntry.displayName), Html.FROM_HTML_MODE_LEGACY));
+                final SubscriptionListEntry subscriptionListEntry =
+                        mConversationDataModel.getData().getSubscriptionEntryForSelfParticipant(
+                                mBinding.getData().getSelfId(), false /* excludeDefault */);
+                if (subscriptionListEntry == null) {
+                    mComposeEditText.setHint(R.string.compose_message_view_hint_text);
+                } else {
+                    mComposeEditText.setHint(Html.fromHtml(getResources().getString(
+                            R.string.compose_message_view_hint_text_multi_sim,
+                            subscriptionListEntry.displayName), Html.FROM_HTML_MODE_LEGACY));
+                }
             }
         } else {
             int type = -1;
