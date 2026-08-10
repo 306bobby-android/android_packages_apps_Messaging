@@ -116,6 +116,7 @@ public class MessageData implements Parcelable {
     public static final int PROTOCOL_SMS = 0;                   // SMS message
     public static final int PROTOCOL_MMS = 1;                   // MMS message
     public static final int PROTOCOL_MMS_PUSH_NOTIFICATION = 2; // MMS WAP push notification
+    public static final int PROTOCOL_RCS = 3;                   // RCS message
 
     // Bugle STATUS Values
     public static final int BUGLE_STATUS_UNKNOWN = 0;
@@ -645,6 +646,14 @@ public class MessageData implements Parcelable {
 
     public final boolean getIsSms() {
         return getIsSms(mProtocol);
+    }
+
+    public static boolean getIsRcs(final int protocol) {
+        return protocol == (MessageData.PROTOCOL_RCS);
+    }
+
+    public final boolean getIsRcs() {
+        return getIsRcs(mProtocol);
     }
 
     public static boolean getIsIncoming(final int status) {

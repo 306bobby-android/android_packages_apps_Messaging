@@ -139,6 +139,12 @@ public class DatabaseHelper extends SQLiteOpenHelper {
 
         // A conversation is enterprise if one of the participant is a enterprise contact.
         public static final String IS_ENTERPRISE = "IS_ENTERPRISE";
+
+        /* RCS Session ID for active RCS session */
+        public static final String RCS_SESSION_ID = "rcs_session_id";
+
+        /* Whether conversation is RCS enabled */
+        public static final String IS_RCS = "is_rcs";
     }
 
     // Conversation table SQL
@@ -170,7 +176,9 @@ public class DatabaseHelper extends SQLiteOpenHelper {
                     + ConversationColumns.PARTICIPANT_COUNT + " INT DEFAULT(0), "
                     + ConversationColumns.INCLUDE_EMAIL_ADDRESS + " INT DEFAULT(0), "
                     + ConversationColumns.SMS_SERVICE_CENTER + " TEXT ,"
-                    + ConversationColumns.IS_ENTERPRISE + " INT DEFAULT(0)"
+                    + ConversationColumns.IS_ENTERPRISE + " INT DEFAULT(0), "
+                    + ConversationColumns.RCS_SESSION_ID + " TEXT, "
+                    + ConversationColumns.IS_RCS + " INT DEFAULT(0)"
                     + ");";
 
     private static final String CONVERSATIONS_TABLE_SMS_THREAD_ID_INDEX_SQL =
@@ -248,6 +256,15 @@ public class DatabaseHelper extends SQLiteOpenHelper {
 
         /* The detailed status (RESPONSE_STATUS or RETRIEVE_STATUS) for MMS message */
         public static final String RAW_TELEPHONY_STATUS = "raw_status";
+
+        /* RCS Message UUID */
+        public static final String RCS_MESSAGE_ID = "rcs_message_id";
+
+        /* Detailed RCS message status */
+        public static final String RCS_STATUS = "rcs_status";
+
+        /* HTTP File Transfer URL for media attachment */
+        public static final String RCS_FILE_TRANSFER_URL = "rcs_file_transfer_url";
     }
 
     // Messages table SQL
@@ -272,6 +289,9 @@ public class DatabaseHelper extends SQLiteOpenHelper {
                     + MessageColumns.RAW_TELEPHONY_STATUS + " INT DEFAULT(0), "
                     + MessageColumns.SELF_PARTICIPANT_ID + " INT, "
                     + MessageColumns.RETRY_START_TIMESTAMP + " INT DEFAULT(0), "
+                    + MessageColumns.RCS_MESSAGE_ID + " TEXT, "
+                    + MessageColumns.RCS_STATUS + " INT DEFAULT(0), "
+                    + MessageColumns.RCS_FILE_TRANSFER_URL + " TEXT, "
                     + "FOREIGN KEY (" + MessageColumns.CONVERSATION_ID + ") REFERENCES "
                     + CONVERSATIONS_TABLE + "(" + ConversationColumns._ID + ") ON DELETE CASCADE "
                     + "FOREIGN KEY (" + MessageColumns.SENDER_PARTICIPANT_ID + ") REFERENCES "
@@ -420,6 +440,12 @@ public class DatabaseHelper extends SQLiteOpenHelper {
 
         /* The exact destination stored in Contacts for this participant */
         public static final String CONTACT_DESTINATION = "contact_destination";
+
+        /* RCS capability status (0 = unknown, 1 = capable, 2 = not capable) */
+        public static final String RCS_CAPABILITY = "rcs_capability";
+
+        /* Timestamp when RCS capability was last queried */
+        public static final String RCS_DISCOVERY_TIMESTAMP = "rcs_discovery_timestamp";
     }
 
     // Participants table SQL
@@ -443,6 +469,8 @@ public class DatabaseHelper extends SQLiteOpenHelper {
                     + ParticipantColumns.SUBSCRIPTION_NAME + " TEXT, "
                     + ParticipantColumns.SUBSCRIPTION_COLOR + " INT DEFAULT(0), "
                     + ParticipantColumns.CONTACT_DESTINATION + " TEXT, "
+                    + ParticipantColumns.RCS_CAPABILITY + " INT DEFAULT(0), "
+                    + ParticipantColumns.RCS_DISCOVERY_TIMESTAMP + " INT DEFAULT(0), "
                     + "UNIQUE (" + ParticipantColumns.NORMALIZED_DESTINATION + ", "
                     + ParticipantColumns.SUB_ID + ") ON CONFLICT FAIL" + ");";
 

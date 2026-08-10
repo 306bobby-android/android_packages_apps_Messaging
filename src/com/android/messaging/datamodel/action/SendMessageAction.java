@@ -37,6 +37,7 @@ import com.android.messaging.datamodel.MessagingContentProvider;
 import com.android.messaging.datamodel.SyncManager;
 import com.android.messaging.datamodel.data.MessageData;
 import com.android.messaging.datamodel.data.ParticipantData;
+import com.android.messaging.rcs.binding.RcsSendMessageDelegate;
 import com.android.messaging.sms.MmsUtils;
 import com.android.messaging.util.Assert;
 import com.android.messaging.util.LogUtil;
@@ -197,17 +198,22 @@ public class SendMessageAction extends Action implements Parcelable {
         final String messageId = actionParameters.getString(KEY_MESSAGE_ID);
         Uri messageUri = actionParameters.getParcelable(KEY_MESSAGE_URI, Uri.class);
         Uri updatedMessageUri = null;
+        final boolean isRcs = message.getProtocol() == MessageData.PROTOCOL_RCS;
         final boolean isSms = message.getProtocol() == MessageData.PROTOCOL_SMS;
         final int subId = actionParameters.getInt(KEY_SUB_ID, ParticipantData.DEFAULT_SELF_SUB_ID);
         final String subPhoneNumber = actionParameters.getString(KEY_SUB_PHONE_NUMBER);
 
-        LogUtil.i(TAG, "SendMessageAction: Sending " + (isSms ? "SMS" : "MMS") + " message "
+        LogUtil.i(TAG, "SendMessageAction: Sending " + (isRcs ? "RCS" : (isSms ? "SMS" : "MMS")) + " message "
                 + messageId + " in conversation " + message.getConversationId());
 
         int status;
         int rawStatus = MessageData.RAW_TELEPHONY_STATUS_UNDEFINED;
         int resultCode = MessageData.UNKNOWN_RESULT_CODE;
-        if (isSms) {
+        if (isRcs) {
+            final Context context = Factory.get().getApplicationContext();
+            final String recipient = actionParameters.getString(KEY_RECIPIENT);
+            status = RcsSendMessageDelegate.sendRcsMessage(context, message, recipient);
+        } else if (isSms) {
             Assert.notNull(messageUri);
             final String recipient = actionParameters.getString(KEY_RECIPIENT);
             final String messageText = message.getMessageText();
