@@ -297,7 +297,7 @@ public class SipStackManager {
                 mOutputStream.flush();
             }
 
-            LogUtil.i(TAG, "Sent SIP REGISTER to P-CSCF (" + bytes.length + " bytes)");
+            LogUtil.i(TAG, "[EXACT SIP REQUEST SENT] SIP REGISTER (" + bytes.length + " bytes):\n" + sb.toString());
         } catch (Exception e) {
             LogUtil.e(TAG, "Error transmitting SIP REGISTER", e);
         }
@@ -311,7 +311,7 @@ public class SipStackManager {
                     final DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                     mUdpSocket.receive(packet);
                     final String message = new String(packet.getData(), 0, packet.getLength(), "UTF-8");
-                    LogUtil.d(TAG, "Received SIP response packet via UDP (" + packet.getLength() + " bytes)");
+                    LogUtil.i(TAG, "[EXACT SIP RESPONSE RECEIVED VIA UDP] (" + packet.getLength() + " bytes):\n" + message);
                     handleIncomingSipMessage(message);
                 } catch (java.net.SocketTimeoutException ste) {
                     // Normal socket timeout while waiting for incoming UDP packets, keep listening
@@ -334,7 +334,7 @@ public class SipStackManager {
                 int bytesRead;
                 while (mIsConnected.get() && mInputStream != null && (bytesRead = mInputStream.read(buffer)) != -1) {
                     final String message = new String(buffer, 0, bytesRead, "UTF-8");
-                    LogUtil.d(TAG, "Received SIP response via TCP (" + bytesRead + " bytes)");
+                    LogUtil.i(TAG, "[EXACT SIP RESPONSE RECEIVED VIA TCP] (" + bytesRead + " bytes):\n" + message);
                     handleIncomingSipMessage(message);
                 }
             } catch (Exception e) {
@@ -406,7 +406,7 @@ public class SipStackManager {
                 mOutputStream.write(bytes);
                 mOutputStream.flush();
             }
-            LogUtil.i(TAG, "Sent SIP OPTIONS capability query for " + destination);
+            LogUtil.i(TAG, "[EXACT SIP REQUEST SENT] SIP OPTIONS for " + destination + ":\n" + sb.toString());
         } catch (Exception e) {
             LogUtil.w(TAG, "Failed to send SIP OPTIONS query: " + e.getMessage());
         }
@@ -459,7 +459,7 @@ public class SipStackManager {
             System.arraycopy(headerBytes, 0, fullMessage, 0, headerBytes.length);
             System.arraycopy(bodyBytes, 0, fullMessage, headerBytes.length, bodyBytes.length);
 
-            LogUtil.i(TAG, "sendSipMessage: full SIP MESSAGE size=" + fullMessage.length + " bytes");
+            LogUtil.i(TAG, "[EXACT SIP REQUEST SENT] SIP MESSAGE (" + fullMessage.length + " bytes):\n" + new String(fullMessage, "UTF-8"));
 
             if (mUseUdp && mUdpSocket != null) {
                 LogUtil.i(TAG, "sendSipMessage: sending via UDP to " + mTargetAddress + ":" + mTargetPort);

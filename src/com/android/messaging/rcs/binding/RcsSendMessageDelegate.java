@@ -52,6 +52,7 @@ public class RcsSendMessageDelegate {
             final String cpimPayload = CpimParser.formatCpimMessage("sip:self@ims", "sip:" + recipient + "@ims",
                     rcsMessageId, message.getMessageText());
             LogUtil.i(TAG, "sendRcsMessage: CPIM payload built, length=" + (cpimPayload != null ? cpimPayload.length() : 0));
+            LogUtil.i(TAG, "[EXACT CPIM OUTBOUND PAYLOAD]:\n" + cpimPayload);
 
             // Actually transmit via SIP stack
             final com.android.messaging.rcs.sip.SipStackManager sipManager = rcsManager.getSipStackManager();

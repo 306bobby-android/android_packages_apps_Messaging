@@ -278,24 +278,28 @@ public class CapabilityDiscoveryManager {
                         new Class<?>[] { callbackClass },
                         (proxy, method, args) -> {
                             final String methodName = method.getName();
-                            LogUtil.i(TAG, "Batch UCE proxy callback invoked: " + methodName);
+                            LogUtil.i(TAG, "==========================================================================");
+                            LogUtil.i(TAG, "[EXACT UCE CALLBACK] Method invoked: " + methodName + ", argsCount=" + (args != null ? args.length : 0));
 
                             if ("onCapabilitiesReceived".equals(methodName)) {
                                 final Object arg = (args != null && args.length > 0) ? args[0] : null;
+                                LogUtil.i(TAG, "[EXACT UCE RESPONSE] Raw payload argument: " + arg);
                                 if (arg instanceof List) {
                                     final List<?> capabilitiesList = (List<?>) arg;
-                                    LogUtil.i(TAG, "onCapabilitiesReceived payload list count: " + capabilitiesList.size());
-                                    for (Object capObj : capabilitiesList) {
+                                    LogUtil.i(TAG, "[EXACT UCE RESPONSE] Capabilities item count: " + capabilitiesList.size());
+                                    for (int idx = 0; idx < capabilitiesList.size(); idx++) {
+                                        final Object capObj = capabilitiesList.get(idx);
+                                        LogUtil.i(TAG, "[EXACT UCE RESPONSE ITEM #" + idx + "] Object: " + capObj);
                                         if (capObj == null) continue;
                                         try {
                                             String contactDest = null;
                                             for (Method m : capObj.getClass().getMethods()) {
-                                                if (m.getReturnType().equals(Uri.class) && m.getParameterTypes().length == 0) {
+                                                if (m.getParameterTypes().length == 0 && !m.getName().equals("hashCode") && !m.getName().equals("toString")) {
                                                     try {
-                                                        final Uri u = (Uri) m.invoke(capObj);
-                                                        if (u != null) {
-                                                            contactDest = u.getSchemeSpecificPart();
-                                                            break;
+                                                        Object val = m.invoke(capObj);
+                                                        LogUtil.i(TAG, "   capObj." + m.getName() + "() = " + val);
+                                                        if (val instanceof Uri && contactDest == null) {
+                                                            contactDest = ((Uri) val).getSchemeSpecificPart();
                                                         }
                                                     } catch (Exception ignored) {}
                                                 }
@@ -305,6 +309,7 @@ public class CapabilityDiscoveryManager {
                                             try {
                                                 final Method isCapMethod = capObj.getClass().getMethod("isCapable", int.class);
                                                 final Boolean isCapRes = (Boolean) isCapMethod.invoke(capObj, 1);
+                                                LogUtil.i(TAG, "   capObj.isCapable(FEATURE_CHAT_1) = " + isCapRes);
                                                 if (isCapRes != null) isCapable = isCapRes;
                                             } catch (Exception ignored) {}
 
@@ -312,35 +317,38 @@ public class CapabilityDiscoveryManager {
                                                 resolvedDestinations.add(contactDest);
                                                 final int resCap = isCapable ? CAPABILITY_RCS_SUPPORTED : CAPABILITY_NOT_SUPPORTED;
                                                 updateCapability(context, contactDest, resCap);
-                                                LogUtil.i(TAG, "Batch resolved RCS capability for " + contactDest + " -> " + resCap + " (isCapable=" + isCapable + ")");
+                                                LogUtil.i(TAG, "[EXACT UCE RESULT] Contact " + contactDest + " capability -> " + capabilityToString(resCap) + " (isCapable=" + isCapable + ")");
+                                            } else {
+                                                LogUtil.w(TAG, "[EXACT UCE RESULT] Could not extract contact Uri from capObj!");
                                             }
                                         } catch (Exception e) {
-                                            LogUtil.w(TAG, "Error parsing batch contact capability item: " + e.getMessage());
+                                            LogUtil.w(TAG, "[EXACT UCE ERROR] Error parsing capability item #" + idx + ": " + e.getMessage());
                                         }
                                     }
                                 }
                             } else if ("onComplete".equals(methodName)) {
-                                // Mark any requested URIs that were NOT resolved as NOT_SUPPORTED, but try SIP OPTIONS fallback
-                                LogUtil.i(TAG, "onComplete: resolved " + resolvedDestinations.size() + " of " + uris.size() + " requested URIs");
+                                LogUtil.i(TAG, "[EXACT UCE COMPLETE] onComplete() fired! Resolved " + resolvedDestinations.size() + " of " + uris.size() + " requested URIs");
                                 final SipStackManager sipManager = RcsManager.getInstance(context).getSipStackManager();
                                 for (Uri requestedUri : uris) {
                                     final String reqDest = requestedUri.getSchemeSpecificPart();
                                     if (!resolvedDestinations.contains(reqDest)) {
-                                        LogUtil.i(TAG, "onComplete: no capability received for " + reqDest + " — attempting SIP OPTIONS query fallback");
+                                        LogUtil.i(TAG, "[EXACT UCE COMPLETE] Contact " + reqDest + " NOT resolved by platform UCE — triggering direct SIP OPTIONS query fallback!");
                                         if (sipManager != null) {
                                             sipManager.sendOptions(reqDest);
                                         }
                                         updateCapability(context, reqDest, CAPABILITY_NOT_SUPPORTED);
+                                    } else {
+                                        LogUtil.i(TAG, "[EXACT UCE COMPLETE] Contact " + reqDest + " was successfully resolved by platform UCE!");
                                     }
                                 }
                             } else if ("onError".equals(methodName)) {
-                                LogUtil.w(TAG, "Batch UCE discovery error: " + (args != null && args.length > 0 ? args[0] : "unknown"));
-                                // On error, attempt SIP OPTIONS fallback
+                                final Object errArg = (args != null && args.length > 0) ? args[0] : "unknown";
+                                LogUtil.w(TAG, "[EXACT UCE ERROR] onError() callback fired with error code/arg: " + errArg);
                                 final SipStackManager sipManager = RcsManager.getInstance(context).getSipStackManager();
                                 for (Uri requestedUri : uris) {
                                     final String reqDest = requestedUri.getSchemeSpecificPart();
                                     if (!resolvedDestinations.contains(reqDest)) {
-                                        LogUtil.i(TAG, "onError: attempting SIP OPTIONS fallback for " + reqDest);
+                                        LogUtil.i(TAG, "[EXACT UCE ERROR] Triggering SIP OPTIONS fallback for " + reqDest + " due to UCE onError(" + errArg + ")");
                                         if (sipManager != null) {
                                             sipManager.sendOptions(reqDest);
                                         }
@@ -348,6 +356,7 @@ public class CapabilityDiscoveryManager {
                                     }
                                 }
                             }
+                            LogUtil.i(TAG, "==========================================================================");
                             return null;
                         }
                 );
