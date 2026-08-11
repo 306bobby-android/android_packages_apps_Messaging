@@ -82,34 +82,73 @@ public class CapabilityDiscoveryManager {
     /**
      * Checks if a destination phone number is an RCS recipient.
      */
+    /**
+     * Checks if a destination phone number is an RCS recipient.
+     */
     public static boolean isRcsRecipient(Context context, String destination) {
         final String normalized = normalizeDestination(context, destination);
+        final String caller = getCallerSummary();
+        LogUtil.i(TAG, "==========================================================================");
+        LogUtil.i(TAG, "[DEEP LOG] isRcsRecipient() CALLED");
+        LogUtil.i(TAG, "[DEEP LOG]   - Caller: " + caller);
+        LogUtil.i(TAG, "[DEEP LOG]   - Raw Destination: '" + destination + "'");
+        LogUtil.i(TAG, "[DEEP LOG]   - Normalized: '" + normalized + "'");
+
         if (TextUtils.isEmpty(normalized)) {
-            LogUtil.d(TAG, "isRcsRecipient: empty destination, returning false");
+            LogUtil.d(TAG, "[DEEP LOG]   -> Empty normalized destination, returning FALSE");
+            LogUtil.i(TAG, "==========================================================================");
             return false;
         }
+
         final int cap = getCachedCapability(context, normalized);
-        LogUtil.i(TAG, "isRcsRecipient: destination=" + normalized + " capability=" + capabilityToString(cap));
+        LogUtil.i(TAG, "[DEEP LOG]   - Resolved Capability: " + capabilityToString(cap) + " (" + cap + ")");
+
         if (cap == CAPABILITY_UNKNOWN) {
-            // Debounce: only trigger discovery if we haven't recently requested for this number
             boolean shouldDiscover = false;
+            long elapsed = -1;
             synchronized (sLastDiscoveryMap) {
                 final Long lastTime = sLastDiscoveryMap.get(normalized);
                 final long now = System.currentTimeMillis();
-                if (lastTime == null || (now - lastTime) > MIN_DISCOVERY_INTERVAL_MS) {
+                if (lastTime != null) {
+                    elapsed = now - lastTime;
+                }
+                if (lastTime == null || elapsed > MIN_DISCOVERY_INTERVAL_MS) {
                     sLastDiscoveryMap.put(normalized, now);
                     shouldDiscover = true;
                 }
             }
+
+            LogUtil.i(TAG, "[DEEP LOG]   - Capability is UNKNOWN!");
+            LogUtil.i(TAG, "[DEEP LOG]   - Debounce Check: lastDiscoveryTime=" + (elapsed >= 0 ? elapsed + "ms ago" : "NEVER")
+                    + ", minInterval=" + MIN_DISCOVERY_INTERVAL_MS + "ms -> shouldDiscover=" + shouldDiscover);
+
             if (shouldDiscover) {
-                LogUtil.i(TAG, "isRcsRecipient: UNKNOWN capability for " + normalized + ", triggering discovery (defaulting to SMS)");
+                LogUtil.i(TAG, "[DEEP LOG]   -> Triggering platform capability discovery for " + normalized + " (defaulting UI to SMS)");
                 requestPlatformCapabilityDiscovery(context, normalized);
             } else {
-                LogUtil.d(TAG, "isRcsRecipient: UNKNOWN capability for " + normalized + ", discovery debounced (defaulting to SMS)");
+                LogUtil.i(TAG, "[DEEP LOG]   -> Discovery DEBOUNCED for " + normalized + " (last request was " + elapsed + "ms ago, threshold " + MIN_DISCOVERY_INTERVAL_MS + "ms)");
             }
+            LogUtil.i(TAG, "==========================================================================");
             return false;
         }
-        return cap == CAPABILITY_RCS_SUPPORTED;
+
+        final boolean result = (cap == CAPABILITY_RCS_SUPPORTED);
+        LogUtil.i(TAG, "[DEEP LOG]   -> Returning isRcs=" + result + " for " + normalized);
+        LogUtil.i(TAG, "==========================================================================");
+        return result;
+    }
+
+    private static String getCallerSummary() {
+        try {
+            final StackTraceElement[] st = Thread.currentThread().getStackTrace();
+            for (int i = 3; i < st.length; i++) {
+                final String className = st[i].getClassName();
+                if (!className.equals(CapabilityDiscoveryManager.class.getName())) {
+                    return st[i].getFileName() + ":" + st[i].getLineNumber() + " (" + st[i].getMethodName() + ")";
+                }
+            }
+        } catch (Exception ignored) {}
+        return "Unknown";
     }
 
     /**
@@ -121,19 +160,20 @@ public class CapabilityDiscoveryManager {
         final String suffix = digits.length() >= 10 ? digits.substring(digits.length() - 10) : digits;
 
         synchronized (sCapabilityCache) {
+            LogUtil.d(TAG, "[DEEP LOG] getCachedCapability: Checking in-memory cache (size=" + sCapabilityCache.size() + ") for suffix '" + suffix + "'");
             for (Map.Entry<String, Integer> entry : sCapabilityCache.entrySet()) {
                 final String cacheKeyDigits = entry.getKey().replaceAll("[^0-9]", "");
                 if (cacheKeyDigits.endsWith(suffix)) {
                     final int cachedCap = entry.getValue();
-                    LogUtil.d(TAG, "getCachedCapability: in-memory cache HIT for suffix " + suffix + " -> " + capabilityToString(cachedCap));
+                    LogUtil.i(TAG, "[DEEP LOG] getCachedCapability: In-memory HIT! Key='" + entry.getKey() + "' suffix='" + suffix + "' -> " + capabilityToString(cachedCap));
                     return cachedCap;
                 }
             }
+            LogUtil.d(TAG, "[DEEP LOG] getCachedCapability: In-memory MISS for suffix '" + suffix + "'. Current cache keys: " + sCapabilityCache.keySet());
         }
 
         final String normalized = normalizeDestination(context, destination);
-
-        LogUtil.d(TAG, "getCachedCapability: in-memory cache MISS for " + normalized + ", querying database async");
+        LogUtil.i(TAG, "[DEEP LOG] getCachedCapability: In-memory MISS for " + normalized + ", scheduling async database lookup");
 
         // Query database on background thread if uncached
         sAsyncExecutor.execute(() -> {
@@ -143,6 +183,7 @@ public class CapabilityDiscoveryManager {
                 try {
                     final String dbDigits = normalized.replaceAll("[^0-9]", "");
                     final String dbSuffix = dbDigits.length() >= 10 ? dbDigits.substring(dbDigits.length() - 10) : dbDigits;
+                    LogUtil.i(TAG, "[DEEP LOG DB] Querying DB table 'participants' for suffix '%" + dbSuffix + "'");
                     cursor = db.query(DatabaseHelper.PARTICIPANTS_TABLE,
                             new String[] { DatabaseHelper.ParticipantColumns.RCS_CAPABILITY, DatabaseHelper.ParticipantColumns.RCS_DISCOVERY_TIMESTAMP },
                             DatabaseHelper.ParticipantColumns.NORMALIZED_DESTINATION + " LIKE ? OR " + DatabaseHelper.ParticipantColumns.DISPLAY_DESTINATION + " LIKE ?",
@@ -151,18 +192,26 @@ public class CapabilityDiscoveryManager {
                     if (cursor != null && cursor.moveToFirst()) {
                         final int capability = cursor.getInt(0);
                         final long timestamp = cursor.getLong(1);
+                        final long ageMs = System.currentTimeMillis() - timestamp;
+                        LogUtil.i(TAG, "[DEEP LOG DB] Found DB row for suffix '%" + dbSuffix + "': rcs_capability="
+                                + capabilityToString(capability) + " (" + capability + "), timestamp=" + timestamp + " (age=" + ageMs + "ms)");
 
-                        if (System.currentTimeMillis() - timestamp < CAPABILITY_CACHE_VALIDITY_MS) {
+                        if (ageMs < CAPABILITY_CACHE_VALIDITY_MS) {
                             synchronized (sCapabilityCache) {
                                 sCapabilityCache.put(normalized, capability);
                             }
+                            LogUtil.i(TAG, "[DEEP LOG DB] Population of in-memory cache SUCCESS for " + normalized + " -> " + capabilityToString(capability));
+                        } else {
+                            LogUtil.w(TAG, "[DEEP LOG DB] DB entry for " + normalized + " is EXPIRED (age " + ageMs + "ms > validity " + CAPABILITY_CACHE_VALIDITY_MS + "ms)");
                         }
+                    } else {
+                        LogUtil.i(TAG, "[DEEP LOG DB] No matching participant row in DB for suffix '%" + dbSuffix + "'");
                     }
                 } finally {
                     if (cursor != null) cursor.close();
                 }
             } catch (Exception e) {
-                LogUtil.e(TAG, "Error querying RCS capability cache", e);
+                LogUtil.e(TAG, "[DEEP LOG DB] Error querying RCS capability cache in database", e);
             }
         });
 
