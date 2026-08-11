@@ -81,8 +81,18 @@ public class RcsChatSession {
     private ServerSocket mListener;
 
     private MsrpSession mMsrp;
-    private State mState = State.IDLE;
+    private volatile State mState = State.IDLE;
     private final Deque<Pending> mPending = new ArrayDeque<>();
+
+    /**
+     * Fails a session that never reaches ESTABLISHED. Without this, an INVITE that draws no
+     * response at all leaves the session in INVITING forever, and every later message for that
+     * contact is queued onto it and silently swallowed — no send, no failure, no fallback.
+     */
+    private static final java.util.concurrent.ScheduledExecutorService sTimers =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+    private static final long INVITE_TIMEOUT_SECONDS = 32;
+    private java.util.concurrent.ScheduledFuture<?> mInviteTimeout;
 
     /** Route set captured from the dialog-establishing exchange. */
     private final List<String> mRouteSet = new ArrayList<>();
@@ -199,6 +209,19 @@ public class RcsChatSession {
         LogUtil.i(TAG, "INVITE -> " + mRemoteUri + " callId=" + mCallId);
         if (!mTransport.sendInvite(this, sdp.getBytes(StandardCharsets.UTF_8))) {
             fail("Failed to hand INVITE to the SIP delegate");
+            return;
+        }
+        mInviteTimeout = sTimers.schedule(() -> {
+            if (mState == State.INVITING) {
+                fail("No response to INVITE within " + INVITE_TIMEOUT_SECONDS + "s");
+            }
+        }, INVITE_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
+    }
+
+    private void cancelInviteTimeout() {
+        if (mInviteTimeout != null) {
+            mInviteTimeout.cancel(false);
+            mInviteTimeout = null;
         }
     }
 
@@ -210,6 +233,7 @@ public class RcsChatSession {
             LogUtil.i(TAG, "INVITE provisional " + status);
             return;
         }
+        cancelInviteTimeout();
         if (status >= 300) {
             fail("INVITE rejected with " + status);
             return;
@@ -349,6 +373,7 @@ public class RcsChatSession {
     // ---------------------------------------------------------------- teardown
 
     public void terminate(String reason) {
+        cancelInviteTimeout();
         if (mState == State.CLOSED || mState == State.TERMINATING) return;
         mState = State.TERMINATING;
         LogUtil.i(TAG, "Terminating session " + mCallId + ": " + reason);
@@ -362,6 +387,7 @@ public class RcsChatSession {
 
     /** Called when the peer sent BYE; no BYE of our own is owed. */
     void onRemoteBye() {
+        cancelInviteTimeout();
         mState = State.CLOSED;
         if (mMsrp != null) mMsrp.close("remote BYE");
         try { if (mListener != null) mListener.close(); } catch (Exception ignored) {}
@@ -370,6 +396,8 @@ public class RcsChatSession {
     }
 
     private void fail(String reason) {
+        cancelInviteTimeout();
+        if (mState == State.CLOSED) return;
         LogUtil.e(TAG, "Session " + mCallId + " failed: " + reason);
         mState = State.CLOSED;
         try { if (mListener != null) mListener.close(); } catch (Exception ignored) {}

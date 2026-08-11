@@ -246,6 +246,11 @@ public class SipDelegateTransport {
                 mConfiguration = (args != null && args.length > 0) ? args[0] : null;
                 mConfigVersion = readConfigVersion(mConfiguration);
                 LogUtil.i(TAG, "SipDelegateConfiguration updated, version=" + mConfigVersion);
+                // The identity and routing values below are what every outbound request is built
+                // from; log them once per version so a malformed request can be traced to its
+                // source rather than guessed at.
+                final SipConfigSnapshot snapshot = SipConfigSnapshot.from(mConfiguration);
+                if (snapshot != null) LogUtil.i(TAG, "  " + snapshot);
                 break;
             case "onDestroyed":
                 mCreatePending = false;
@@ -312,6 +317,10 @@ public class SipDelegateTransport {
         }
 
         LogUtil.i(TAG, "Inbound SIP: " + startLine);
+        LogUtil.i(TAG, "[INBOUND SIP]\n" + startLine + "\n" + headerSection
+                + (content.length > 0
+                        ? "\n" + new String(content, java.nio.charset.StandardCharsets.UTF_8)
+                        : ""));
 
         boolean consumed = false;
         for (SipMessageListener listener : mListeners) {
@@ -368,6 +377,10 @@ public class SipDelegateTransport {
             connection.getClass().getMethod("sendMessage", sipMessageClass, long.class)
                     .invoke(connection, message, mConfigVersion);
             LogUtil.i(TAG, "Sent SIP: " + startLine);
+            LogUtil.i(TAG, "[OUTBOUND SIP]\n" + startLine + "\n" + headerSection
+                    + (content != null && content.length > 0
+                            ? "\n" + new String(content, java.nio.charset.StandardCharsets.UTF_8)
+                            : ""));
             return true;
         } catch (Throwable t) {
             LogUtil.e(TAG, "sendSipMessage failed: " + describe(t));

@@ -124,7 +124,7 @@ public class RcsChatSessionManager
             LogUtil.w(TAG, "sendText: no delegate configuration");
             return false;
         }
-        final String remoteUri = toSipUri(destination, config.homeDomain);
+        final String remoteUri = toSipUri(mContext, destination, config.homeDomain);
         if (remoteUri == null) {
             LogUtil.w(TAG, "sendText: cannot build a request URI for " + destination);
             return false;
@@ -411,17 +411,26 @@ public class RcsChatSessionManager
         return values;
     }
 
-    /** Builds a request URI from a phone number, keeping any URI it is already given. */
-    static String toSipUri(String destination, String homeDomain) {
+    /**
+     * Builds a request URI from a phone number, keeping any URI it is already given.
+     *
+     * <p>The number must be E.164. A request URI built from a locally-formatted number such as
+     * {@code sip:7653157031@msg.pc.t-mobile.com} is accepted by the ImsService and transmitted,
+     * then silently discarded by the network with no response at all — so this normalizes rather
+     * than passing the dialled digits through.
+     */
+    static String toSipUri(Context context, String destination, String homeDomain) {
         if (TextUtils.isEmpty(destination)) return null;
         final String trimmed = destination.trim();
         if (trimmed.startsWith("sip:") || trimmed.startsWith("sips:") || trimmed.startsWith("tel:")) {
             return trimmed;
         }
         if (TextUtils.isEmpty(homeDomain)) return null;
-        final String digits = trimmed.replaceAll("[^0-9+]", "");
-        if (digits.isEmpty()) return null;
-        return "sip:" + digits + "@" + homeDomain + ";user=phone";
+
+        final String e164 = com.android.messaging.rcs.uce.CapabilityDiscoveryManager
+                .normalizeDestination(context, trimmed);
+        if (TextUtils.isEmpty(e164)) return null;
+        return "sip:" + e164 + "@" + homeDomain + ";user=phone";
     }
 
     private static String normalizeUri(String uri) {
