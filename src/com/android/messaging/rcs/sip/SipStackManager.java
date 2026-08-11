@@ -313,9 +313,12 @@ public class SipStackManager {
                     final String message = new String(packet.getData(), 0, packet.getLength(), "UTF-8");
                     LogUtil.i(TAG, "SIP Message Received via UDP:\n" + message);
                     handleIncomingSipMessage(message);
+                } catch (java.net.SocketTimeoutException ste) {
+                    // Normal socket timeout while waiting for incoming UDP packets, keep listening
+                    LogUtil.d(TAG, "UDP socket read timeout, continuing listener loop...");
                 } catch (Exception e) {
                     if (mIsConnected.get()) {
-                        LogUtil.w(TAG, "UDP receive timeout: " + e.getMessage() + ", trying TCP fallback...");
+                        LogUtil.w(TAG, "UDP socket error: " + e.getMessage() + ", trying TCP fallback...");
                         switchToTcpTransport();
                         break;
                     }
