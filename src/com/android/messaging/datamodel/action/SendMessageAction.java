@@ -144,7 +144,8 @@ public class SendMessageAction extends Action implements Parcelable {
             actionParameters.putInt(KEY_SUB_ID, self.getSubId());
             actionParameters.putString(KEY_SUB_PHONE_NUMBER, self.getNormalizedDestination());
 
-            if (isSms) {
+            final boolean isRcs = message.getProtocol() == MessageData.PROTOCOL_RCS;
+            if (isSms || isRcs) {
                 final String smsc = BugleDatabaseOperations.getSmsServiceCenterForConversation(
                         db, conversationId);
                 actionParameters.putString(KEY_SMS_SERVICE_CENTER, smsc);
@@ -153,12 +154,12 @@ public class SendMessageAction extends Action implements Parcelable {
                     final String recipient = recipients.get(0);
 
                     actionParameters.putString(KEY_RECIPIENT, recipient);
-                    // Queue actual sending for SMS
+                    // Queue actual sending for SMS/RCS
                     processingAction.requestBackgroundWork(this);
 
                     if (LogUtil.isLoggable(TAG, LogUtil.DEBUG)) {
-                        LogUtil.d(TAG, "SendMessageAction: Queued SMS message " + messageId
-                                + " for sending");
+                        LogUtil.d(TAG, "SendMessageAction: Queued " + (isRcs ? "RCS" : "SMS") + " message " + messageId
+                                + " for sending to " + recipient);
                     }
                     return true;
                 } else {
