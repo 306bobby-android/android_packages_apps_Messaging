@@ -92,6 +92,7 @@ android_app {
         "libframesequence",
         "libgiftranscode",
         "com.android.messaging.allowlist",
+        "privapp-permissions-com.android.messaging",
     ],
     optimize: {
         obfuscate: true,
@@ -102,6 +103,13 @@ android_app {
     sdk_version: "current",
 
     product_specific: true,
+
+    // RCS chat carries its message content over MSRP on the IMS PDN, which is a restricted
+    // network. Binding a socket to it requires CONNECTIVITY_USE_RESTRICTED_NETWORKS, a
+    // signature|privileged permission, so the app has to install to /product/priv-app and be
+    // allowlisted below. Without this the SIP session establishes and then no bytes can flow:
+    //   SocketException: Binding socket to network 101 failed: EPERM
+    privileged: true,
 }
 
 prebuilt_etc {
@@ -109,5 +117,13 @@ prebuilt_etc {
     product_specific: true,
     sub_dir: "sysconfig",
     src: "com.android.messaging.allowlist.xml",
+    filename_from_src: true,
+}
+
+prebuilt_etc {
+    name: "privapp-permissions-com.android.messaging",
+    product_specific: true,
+    sub_dir: "permissions",
+    src: "privapp-permissions-com.android.messaging.xml",
     filename_from_src: true,
 }
