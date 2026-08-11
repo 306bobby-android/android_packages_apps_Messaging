@@ -56,10 +56,13 @@ public class PeopleOptionsItemData {
                 break;
 
             case SETTING_BLOCKED:
-                Assert.notNull(otherParticipant);
-                final int resourceId = otherParticipant.isBlocked() ?
-                        R.string.unblock_contact_title : R.string.block_contact_title;
-                mTitle = mContext.getString(resourceId, otherParticipant.getDisplayDestination());
+                if (otherParticipant != null) {
+                    final int resourceId = otherParticipant.isBlocked() ?
+                            R.string.unblock_contact_title : R.string.block_contact_title;
+                    mTitle = mContext.getString(resourceId, otherParticipant.getDisplayDestination());
+                } else {
+                    mTitle = mContext.getString(R.string.block_contact_title, "");
+                }
                 break;
 
             case SETTING_READ_RECEIPTS:
