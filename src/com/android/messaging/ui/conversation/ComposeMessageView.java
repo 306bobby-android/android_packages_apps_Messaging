@@ -730,16 +730,28 @@ public class ComposeMessageView extends LinearLayout
         final int attachmentCount = attachments.size();
         if (attachmentCount == 0) {
             boolean isRecipientRcs = false;
+            String dest = null;
             if (RcsManager.getInstance(getContext()).isRcsAvailable()
                     && mConversationDataModel != null && mConversationDataModel.isBound()) {
                 final ParticipantData other = mConversationDataModel.getData().getParticipants().getOtherParticipant();
                 if (other != null) {
-                    final String dest = other.getNormalizedDestination();
+                    dest = other.getNormalizedDestination();
+                    LogUtil.i("ComposeMessageView", "RCS check for dest=" + dest);
                     if (com.android.messaging.rcs.uce.CapabilityDiscoveryManager.isRcsRecipient(getContext(), dest)) {
                         isRecipientRcs = true;
+                        LogUtil.i("ComposeMessageView", "Recipient " + dest + " IS RCS capable — switching to RCS mode");
+                    } else {
+                        LogUtil.i("ComposeMessageView", "Recipient " + dest + " is NOT RCS — staying in SMS mode");
                     }
+                } else {
+                    LogUtil.d("ComposeMessageView", "No other participant found, defaulting to SMS");
                 }
+            } else {
+                LogUtil.d("ComposeMessageView", "RCS not available or data not bound, defaulting to SMS");
             }
+
+            LogUtil.i("ComposeMessageView", "updateVisualsOnDraftChanged: isRecipientRcs=" + isRecipientRcs
+                    + (dest != null ? " dest=" + dest : " (no other participant)"));
 
             if (isRecipientRcs) {
                 mComposeEditText.setHint(R.string.compose_message_view_hint_text_rcs);

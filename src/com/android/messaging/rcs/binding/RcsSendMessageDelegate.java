@@ -32,23 +32,50 @@ public class RcsSendMessageDelegate {
     private static final String TAG = "RcsSendMessageDelegate";
 
     public static int sendRcsMessage(Context context, MessageData message, String recipient) {
+        LogUtil.i(TAG, "===== RCS MESSAGE SEND START =====");
+        LogUtil.i(TAG, "sendRcsMessage: recipient=" + recipient);
+        LogUtil.i(TAG, "sendRcsMessage: messageText=" + (message.getMessageText() != null ? message.getMessageText().substring(0, Math.min(50, message.getMessageText().length())) + "..." : "null"));
+        LogUtil.i(TAG, "sendRcsMessage: protocol=" + message.getProtocol() + " conversationId=" + message.getConversationId());
+
         final RcsManager rcsManager = RcsManager.getInstance(context);
         if (!rcsManager.isRcsAvailable()) {
-            LogUtil.w(TAG, "RCS unavailable, signaling fallback required");
+            LogUtil.w(TAG, "sendRcsMessage: RCS unavailable (isRcsAvailable=false), signaling fallback required");
+            LogUtil.i(TAG, "===== RCS MESSAGE SEND END (unavailable) =====");
             return MessageData.BUGLE_STATUS_OUTGOING_FAILED;
         }
+        LogUtil.i(TAG, "sendRcsMessage: RCS is available, proceeding");
 
         try {
             final String rcsMessageId = UUID.randomUUID().toString();
+            LogUtil.i(TAG, "sendRcsMessage: generated rcsMessageId=" + rcsMessageId);
+
             final String cpimPayload = CpimParser.formatCpimMessage("sip:self@ims", "sip:" + recipient + "@ims",
                     rcsMessageId, message.getMessageText());
+            LogUtil.i(TAG, "sendRcsMessage: CPIM payload built, length=" + (cpimPayload != null ? cpimPayload.length() : 0));
+            LogUtil.d(TAG, "sendRcsMessage: CPIM payload:\n" + cpimPayload);
 
-            LogUtil.i(TAG, "Transmitting outbound RCS CPIM payload (ID: " + rcsMessageId + ") to " + recipient);
+            // Actually transmit via SIP stack
+            final com.android.messaging.rcs.sip.SipStackManager sipManager = rcsManager.getSipStackManager();
+            if (sipManager == null) {
+                LogUtil.e(TAG, "sendRcsMessage: SipStackManager is null! Cannot transmit.");
+                LogUtil.i(TAG, "===== RCS MESSAGE SEND END (no SIP stack) =====");
+                return MessageData.BUGLE_STATUS_OUTGOING_FAILED;
+            }
+            LogUtil.i(TAG, "sendRcsMessage: SipStackManager obtained, attempting SIP MESSAGE send");
 
-            // Transport send verification for RCS message delivery
-            return MessageData.BUGLE_STATUS_OUTGOING_DELIVERED;
+            final boolean sent = sipManager.sendSipMessage(recipient, cpimPayload, rcsMessageId);
+            if (sent) {
+                LogUtil.i(TAG, "sendRcsMessage: SIP MESSAGE transmitted successfully");
+                LogUtil.i(TAG, "===== RCS MESSAGE SEND END (sent, awaiting delivery confirmation) =====");
+                return MessageData.BUGLE_STATUS_OUTGOING_COMPLETE;
+            } else {
+                LogUtil.e(TAG, "sendRcsMessage: SIP MESSAGE transmission failed");
+                LogUtil.i(TAG, "===== RCS MESSAGE SEND END (transport failure) =====");
+                return MessageData.BUGLE_STATUS_OUTGOING_FAILED;
+            }
         } catch (Exception e) {
-            LogUtil.e(TAG, "RCS transmit error", e);
+            LogUtil.e(TAG, "sendRcsMessage: RCS transmit error", e);
+            LogUtil.i(TAG, "===== RCS MESSAGE SEND END (exception) =====");
             return MessageData.BUGLE_STATUS_OUTGOING_FAILED;
         }
     }

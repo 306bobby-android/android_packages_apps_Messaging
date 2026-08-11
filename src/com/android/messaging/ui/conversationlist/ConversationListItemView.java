@@ -219,7 +219,7 @@ public class ConversationListItemView extends FrameLayout implements OnClickList
         final String dest = mData.getOtherParticipantNormalizedDestination();
         if (!mData.getIsGroup() && !TextUtils.isEmpty(dest)) {
             final boolean isRcs = com.android.messaging.rcs.uce.CapabilityDiscoveryManager.isRcsRecipient(getContext(), dest);
-            final float alpha = isRcs ? 1.0f : 0.7f;
+            final float alpha = isRcs ? 1.0f : 0.8f;
             mConversationNameView.setAlpha(alpha);
         } else {
             mConversationNameView.setAlpha(1.0f);

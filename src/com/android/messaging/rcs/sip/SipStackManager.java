@@ -409,6 +409,80 @@ public class SipStackManager {
         }
     }
 
+    /**
+     * Transmits a SIP MESSAGE request carrying a CPIM payload to deliver an RCS message.
+     * @return true if the message was successfully written to the transport socket
+     */
+    public boolean sendSipMessage(String destination, String cpimPayload, String rcsMessageId) {
+        LogUtil.i(TAG, "===== RCS SIP MESSAGE SEND START =====");
+        LogUtil.i(TAG, "sendSipMessage: destination=" + destination + " messageId=" + rcsMessageId);
+        LogUtil.i(TAG, "sendSipMessage: CPIM payload length=" + (cpimPayload != null ? cpimPayload.length() : 0));
+        try {
+            if (!mIsConnected.get()) {
+                LogUtil.e(TAG, "sendSipMessage: SIP stack is NOT connected. Cannot send.");
+                LogUtil.i(TAG, "===== RCS SIP MESSAGE SEND END (not connected) =====");
+                return false;
+            }
+            if (destination == null || cpimPayload == null) {
+                LogUtil.e(TAG, "sendSipMessage: null destination or payload");
+                LogUtil.i(TAG, "===== RCS SIP MESSAGE SEND END (null params) =====");
+                return false;
+            }
+
+            final String formattedDest = destination.startsWith("+") ? destination : "+" + destination;
+            final String callId = UUID.randomUUID().toString();
+            final String branch = "z9hG4bK" + UUID.randomUUID().toString().replace("-", "");
+            final String targetUri = "sip:" + formattedDest + "@" + mConfig.getSipDomain();
+            final byte[] bodyBytes = cpimPayload.getBytes("UTF-8");
+
+            LogUtil.i(TAG, "sendSipMessage: targetUri=" + targetUri + " callId=" + callId);
+            LogUtil.i(TAG, "sendSipMessage: transport=" + (mUseUdp ? "UDP" : "TCP/TLS"));
+
+            final StringBuilder sb = new StringBuilder();
+            sb.append("MESSAGE ").append(targetUri).append(" SIP/2.0\r\n");
+            sb.append("Via: SIP/2.0/").append(mUseUdp ? "UDP" : "TCP").append(" ")
+                    .append(mConfig.getPCscfAddress()).append(";branch=").append(branch).append("\r\n");
+            sb.append("From: <sip:self@").append(mConfig.getSipDomain())
+                    .append(">;tag=").append(UUID.randomUUID().toString().substring(0, 8)).append("\r\n");
+            sb.append("To: <").append(targetUri).append(">\r\n");
+            sb.append("Call-ID: ").append(callId).append("\r\n");
+            sb.append("CSeq: ").append(mCSeq++).append(" MESSAGE\r\n");
+            sb.append("Content-Type: message/cpim\r\n");
+            sb.append("Content-Length: ").append(bodyBytes.length).append("\r\n");
+            sb.append("\r\n");
+
+            final byte[] headerBytes = sb.toString().getBytes("UTF-8");
+            final byte[] fullMessage = new byte[headerBytes.length + bodyBytes.length];
+            System.arraycopy(headerBytes, 0, fullMessage, 0, headerBytes.length);
+            System.arraycopy(bodyBytes, 0, fullMessage, headerBytes.length, bodyBytes.length);
+
+            LogUtil.i(TAG, "sendSipMessage: full SIP MESSAGE size=" + fullMessage.length + " bytes");
+            LogUtil.d(TAG, "sendSipMessage: SIP headers:\n" + sb.toString());
+
+            if (mUseUdp && mUdpSocket != null) {
+                LogUtil.i(TAG, "sendSipMessage: sending via UDP to " + mTargetAddress + ":" + mTargetPort);
+                final DatagramPacket packet = new DatagramPacket(fullMessage, fullMessage.length, mTargetAddress, mTargetPort);
+                mUdpSocket.send(packet);
+            } else if (mOutputStream != null) {
+                LogUtil.i(TAG, "sendSipMessage: sending via TCP to " + mTargetAddress + ":" + mTargetPort);
+                mOutputStream.write(fullMessage);
+                mOutputStream.flush();
+            } else {
+                LogUtil.e(TAG, "sendSipMessage: no socket available (UDP socket=" + mUdpSocket + ", outputStream=" + mOutputStream + ")");
+                LogUtil.i(TAG, "===== RCS SIP MESSAGE SEND END (no socket) =====");
+                return false;
+            }
+
+            LogUtil.i(TAG, "sendSipMessage: SIP MESSAGE sent successfully for messageId=" + rcsMessageId);
+            LogUtil.i(TAG, "===== RCS SIP MESSAGE SEND END (success) =====");
+            return true;
+        } catch (Exception e) {
+            LogUtil.e(TAG, "sendSipMessage: failed to send SIP MESSAGE", e);
+            LogUtil.i(TAG, "===== RCS SIP MESSAGE SEND END (error) =====");
+            return false;
+        }
+    }
+
     public void disconnect() {
         mIsConnected.set(false);
         try {

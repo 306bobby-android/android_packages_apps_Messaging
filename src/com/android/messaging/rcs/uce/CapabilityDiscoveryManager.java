@@ -58,6 +58,15 @@ public class CapabilityDiscoveryManager {
     private static final ArrayMap<String, Long> sLastDiscoveryMap = new ArrayMap<>();
     private static final Executor sAsyncExecutor = Executors.newSingleThreadExecutor();
 
+    private static String capabilityToString(int capability) {
+        switch (capability) {
+            case CAPABILITY_RCS_SUPPORTED: return "RCS_SUPPORTED";
+            case CAPABILITY_NOT_SUPPORTED: return "NOT_SUPPORTED";
+            case CAPABILITY_UNKNOWN:
+            default: return "UNKNOWN";
+        }
+    }
+
     /**
      * Normalizes destination phone number to E.164 standard (+1XXXXXXXXXX).
      */
@@ -76,16 +85,17 @@ public class CapabilityDiscoveryManager {
     public static boolean isRcsRecipient(Context context, String destination) {
         final String normalized = normalizeDestination(context, destination);
         if (TextUtils.isEmpty(normalized)) {
+            LogUtil.d(TAG, "isRcsRecipient: empty destination, returning false");
             return false;
         }
         final int cap = getCachedCapability(context, normalized);
-        if (cap == CAPABILITY_RCS_SUPPORTED || cap == CAPABILITY_UNKNOWN) {
-            if (cap == CAPABILITY_UNKNOWN) {
-                requestPlatformCapabilityDiscovery(context, normalized);
-            }
-            return true;
+        LogUtil.i(TAG, "isRcsRecipient: destination=" + normalized + " capability=" + capabilityToString(cap));
+        if (cap == CAPABILITY_UNKNOWN) {
+            LogUtil.i(TAG, "isRcsRecipient: UNKNOWN capability for " + normalized + ", triggering discovery (defaulting to SMS)");
+            requestPlatformCapabilityDiscovery(context, normalized);
+            return false;
         }
-        return false;
+        return cap == CAPABILITY_RCS_SUPPORTED;
     }
 
     /**
@@ -100,12 +110,16 @@ public class CapabilityDiscoveryManager {
             for (Map.Entry<String, Integer> entry : sCapabilityCache.entrySet()) {
                 final String cacheKeyDigits = entry.getKey().replaceAll("[^0-9]", "");
                 if (cacheKeyDigits.endsWith(suffix)) {
-                    return entry.getValue();
+                    final int cachedCap = entry.getValue();
+                    LogUtil.d(TAG, "getCachedCapability: in-memory cache HIT for suffix " + suffix + " -> " + capabilityToString(cachedCap));
+                    return cachedCap;
                 }
             }
         }
 
         final String normalized = normalizeDestination(context, destination);
+
+        LogUtil.d(TAG, "getCachedCapability: in-memory cache MISS for " + normalized + ", querying database async");
 
         // Query database on background thread if uncached
         sAsyncExecutor.execute(() -> {
@@ -145,6 +159,7 @@ public class CapabilityDiscoveryManager {
      * Forcefully triggers UCE capability discovery bypassing debouncing timers.
      */
     public static void forceRefreshCapability(Context context, String destination) {
+        LogUtil.i(TAG, "forceRefreshCapability: forcing rediscovery for " + destination);
         final String normalized = normalizeDestination(context, destination);
         if (TextUtils.isEmpty(normalized)) return;
         synchronized (sLastDiscoveryMap) {
@@ -164,9 +179,15 @@ public class CapabilityDiscoveryManager {
     public static void requestBatchCapabilityDiscovery(Context context, List<String> destinations) {
         if (destinations == null || destinations.isEmpty()) return;
         sAsyncExecutor.execute(() -> {
+            LogUtil.i(TAG, "===== RCS DISCOVERY START =====");
+            LogUtil.i(TAG, "Discovery request for " + destinations.size() + " destinations: " + destinations);
             try {
                 final Object uceAdapter = RcsManager.getInstance(context).getPlatformUceAdapter();
-                if (uceAdapter == null) return;
+                if (uceAdapter == null) {
+                    LogUtil.w(TAG, "Platform UCE adapter is null — discovery cannot proceed. Is IMS registered?");
+                    LogUtil.i(TAG, "===== RCS DISCOVERY END (no adapter) =====");
+                    return;
+                }
 
                 final List<Uri> uris = new ArrayList<>();
                 for (String dest : destinations) {
@@ -178,6 +199,7 @@ public class CapabilityDiscoveryManager {
                         }
                     }
                 }
+                LogUtil.i(TAG, "Built " + uris.size() + " tel: URIs for discovery: " + uris);
                 if (uris.isEmpty()) return;
 
                 LogUtil.i(TAG, "Submitting batch platform UCE capability discovery for " + uris.size() + " contacts");
@@ -263,8 +285,10 @@ public class CapabilityDiscoveryManager {
                 } else {
                     LogUtil.w(TAG, "No compatible UCE method found on RcsUceAdapter");
                 }
+                LogUtil.i(TAG, "===== RCS DISCOVERY END =====");
             } catch (Exception e) {
                 LogUtil.w(TAG, "Batch UCE discovery failed: " + e.getMessage());
+                LogUtil.i(TAG, "===== RCS DISCOVERY END (error) =====");
             }
         });
     }
@@ -282,6 +306,7 @@ public class CapabilityDiscoveryManager {
      * Updates capability cache in database and in-memory map.
      */
     public static void updateCapability(Context context, String destination, int capability) {
+        LogUtil.i(TAG, "updateCapability: destination=" + destination + " capability=" + capabilityToString(capability));
         final String normalized = normalizeDestination(context, destination);
         if (TextUtils.isEmpty(normalized)) return;
 
