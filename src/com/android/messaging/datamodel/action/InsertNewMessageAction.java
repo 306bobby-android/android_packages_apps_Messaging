@@ -192,7 +192,7 @@ public class InsertNewMessageAction extends Action implements Parcelable {
 
         if (isRcs) {
             final String recipient = recipients.get(0);
-            actionParameters.putString(KEY_RECIPIENT, recipient);
+            actionParameters.putString(SendMessageAction.KEY_RECIPIENT, recipient);
             insertSendingRcsMessage(message, subId, recipient, timestamp, conversationId);
             BugleDatabaseOperations.updateDraftMessageData(db, conversationId,
                     null /* message */, BugleDatabaseOperations.UPDATE_MODE_CLEAR_DRAFT);

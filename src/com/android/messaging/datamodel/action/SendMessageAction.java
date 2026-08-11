@@ -74,8 +74,8 @@ public class SendMessageAction extends Action implements Parcelable {
     private static final String KEY_SUB_PHONE_NUMBER = "sub_phone_number";
 
     // For sms messages a few extra values are included in the bundle
-    private static final String KEY_RECIPIENT = "recipient";
-    private static final String KEY_RECIPIENTS = "recipients";
+    public static final String KEY_RECIPIENT = "recipient";
+    public static final String KEY_RECIPIENTS = "recipients";
     private static final String KEY_SMS_SERVICE_CENTER = "sms_service_center";
 
     // Values we attach to the pending intent that's fired when the message is sent.
