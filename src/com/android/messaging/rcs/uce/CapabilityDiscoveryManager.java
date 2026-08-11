@@ -91,8 +91,22 @@ public class CapabilityDiscoveryManager {
         final int cap = getCachedCapability(context, normalized);
         LogUtil.i(TAG, "isRcsRecipient: destination=" + normalized + " capability=" + capabilityToString(cap));
         if (cap == CAPABILITY_UNKNOWN) {
-            LogUtil.i(TAG, "isRcsRecipient: UNKNOWN capability for " + normalized + ", triggering discovery (defaulting to SMS)");
-            requestPlatformCapabilityDiscovery(context, normalized);
+            // Debounce: only trigger discovery if we haven't recently requested for this number
+            boolean shouldDiscover = false;
+            synchronized (sLastDiscoveryMap) {
+                final Long lastTime = sLastDiscoveryMap.get(normalized);
+                final long now = System.currentTimeMillis();
+                if (lastTime == null || (now - lastTime) > MIN_DISCOVERY_INTERVAL_MS) {
+                    sLastDiscoveryMap.put(normalized, now);
+                    shouldDiscover = true;
+                }
+            }
+            if (shouldDiscover) {
+                LogUtil.i(TAG, "isRcsRecipient: UNKNOWN capability for " + normalized + ", triggering discovery (defaulting to SMS)");
+                requestPlatformCapabilityDiscovery(context, normalized);
+            } else {
+                LogUtil.d(TAG, "isRcsRecipient: UNKNOWN capability for " + normalized + ", discovery debounced (defaulting to SMS)");
+            }
             return false;
         }
         return cap == CAPABILITY_RCS_SUPPORTED;
@@ -200,10 +214,15 @@ public class CapabilityDiscoveryManager {
                     }
                 }
                 LogUtil.i(TAG, "Built " + uris.size() + " tel: URIs for discovery: " + uris);
-                if (uris.isEmpty()) return;
+                if (uris.isEmpty()) {
+                    LogUtil.i(TAG, "===== RCS DISCOVERY END (no URIs) =====");
+                    return;
+                }
 
                 LogUtil.i(TAG, "Submitting batch platform UCE capability discovery for " + uris.size() + " contacts");
                 final Class<?> callbackClass = Class.forName("android.telephony.ims.RcsUceAdapter$CapabilitiesCallback");
+
+                final java.util.Set<String> resolvedDestinations = java.util.Collections.synchronizedSet(new java.util.HashSet<>());
 
                 final Object callbackProxy = Proxy.newProxyInstance(
                         context.getClassLoader(),
@@ -241,6 +260,7 @@ public class CapabilityDiscoveryManager {
                                             } catch (Exception ignored) {}
 
                                             if (contactDest != null) {
+                                                resolvedDestinations.add(contactDest);
                                                 final int resCap = isCapable ? CAPABILITY_RCS_SUPPORTED : CAPABILITY_NOT_SUPPORTED;
                                                 updateCapability(context, contactDest, resCap);
                                                 LogUtil.i(TAG, "Batch resolved RCS capability for " + contactDest + " -> " + resCap + " (isCapable=" + isCapable + ")");
@@ -250,8 +270,26 @@ public class CapabilityDiscoveryManager {
                                         }
                                     }
                                 }
+                            } else if ("onComplete".equals(methodName)) {
+                                // Mark any requested URIs that were NOT resolved as NOT_SUPPORTED
+                                LogUtil.i(TAG, "onComplete: resolved " + resolvedDestinations.size() + " of " + uris.size() + " requested URIs");
+                                for (Uri requestedUri : uris) {
+                                    final String reqDest = requestedUri.getSchemeSpecificPart();
+                                    if (!resolvedDestinations.contains(reqDest)) {
+                                        LogUtil.i(TAG, "onComplete: no capability received for " + reqDest + " — marking as NOT_SUPPORTED");
+                                        updateCapability(context, reqDest, CAPABILITY_NOT_SUPPORTED);
+                                    }
+                                }
                             } else if ("onError".equals(methodName)) {
                                 LogUtil.w(TAG, "Batch UCE discovery error: " + (args != null && args.length > 0 ? args[0] : "unknown"));
+                                // On error, mark all as NOT_SUPPORTED so we don't keep retrying
+                                for (Uri requestedUri : uris) {
+                                    final String reqDest = requestedUri.getSchemeSpecificPart();
+                                    if (!resolvedDestinations.contains(reqDest)) {
+                                        LogUtil.i(TAG, "onError: marking " + reqDest + " as NOT_SUPPORTED due to error");
+                                        updateCapability(context, reqDest, CAPABILITY_NOT_SUPPORTED);
+                                    }
+                                }
                             }
                             return null;
                         }
