@@ -26,6 +26,7 @@ import androidx.collection.ArrayMap;
 import com.android.messaging.datamodel.DatabaseHelper;
 import com.android.messaging.datamodel.DatabaseWrapper;
 import com.android.messaging.datamodel.DataModel;
+import com.android.messaging.datamodel.data.ParticipantData;
 import com.android.messaging.rcs.RcsManager;
 import com.android.messaging.rcs.sip.SipStackManager;
 import com.android.messaging.util.LogUtil;
@@ -33,6 +34,8 @@ import com.android.messaging.util.PhoneUtils;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
@@ -62,7 +65,7 @@ public class CapabilityDiscoveryManager {
         if (digits.startsWith("+")) return digits;
         if (digits.length() == 10) return "+1" + digits;
         if (digits.length() == 11 && digits.startsWith("1")) return "+" + digits;
-        return PhoneUtils.get(com.android.messaging.datamodel.data.ParticipantData.DEFAULT_SELF_SUB_ID).getCanonicalBySimLocale(destination);
+        return PhoneUtils.get(ParticipantData.DEFAULT_SELF_SUB_ID).getCanonicalBySimLocale(destination);
     }
 
     /**
@@ -130,76 +133,95 @@ public class CapabilityDiscoveryManager {
     }
 
     /**
-     * Triggers asynchronous RCS capability discovery via platform Telephony RcsUceAdapter.
+     * Triggers batch RCS capability discovery for multiple contact URIs in a single platform UCE request.
      */
-    public static void requestPlatformCapabilityDiscovery(Context context, String destination) {
-        final String normalized = normalizeDestination(context, destination);
-        if (TextUtils.isEmpty(normalized)) return;
-
-        synchronized (sLastDiscoveryMap) {
-            final Long lastDiscovery = sLastDiscoveryMap.get(normalized);
-            if (lastDiscovery != null && (System.currentTimeMillis() - lastDiscovery < MIN_DISCOVERY_INTERVAL_MS)) {
-                return; // Debounced
-            }
-            sLastDiscoveryMap.put(normalized, System.currentTimeMillis());
-        }
-
+    public static void requestBatchCapabilityDiscovery(Context context, List<String> destinations) {
+        if (destinations == null || destinations.isEmpty()) return;
         sAsyncExecutor.execute(() -> {
             try {
                 final Object uceAdapter = RcsManager.getInstance(context).getPlatformUceAdapter();
-                if (uceAdapter != null) {
-                    final Uri contactUri = Uri.parse("tel:" + normalized);
-                    final Class<?> callbackClass = Class.forName("android.telephony.ims.RcsUceAdapter$CapabilitiesCallback");
+                if (uceAdapter == null) return;
 
-                    final Object callbackProxy = Proxy.newProxyInstance(
-                            context.getClassLoader(),
-                            new Class<?>[] { callbackClass },
-                            (proxy, method, args) -> {
-                                final String methodName = method.getName();
-                                LogUtil.i(TAG, "Platform UCE proxy callback invoked: " + methodName + " for " + normalized);
-
-                                if ("onCapabilitiesReceived".equals(methodName)) {
-                                    final Object arg = (args != null && args.length > 0) ? args[0] : null;
-                                    LogUtil.i(TAG, "Platform UCE capabilities payload for " + normalized + ": " + arg);
-                                    int resultCap = CAPABILITY_RCS_SUPPORTED;
-                                    if (arg instanceof java.util.List) {
-                                        final java.util.List<?> list = (java.util.List<?>) arg;
-                                        if (list.isEmpty()) {
-                                            resultCap = CAPABILITY_NOT_SUPPORTED;
-                                        }
-                                    }
-                                    updateCapability(context, normalized, resultCap);
-                                    LogUtil.i(TAG, "Platform UCE capability resolved for " + normalized + " -> " + resultCap);
-                                } else if ("onError".equals(methodName)) {
-                                    LogUtil.w(TAG, "Platform UCE discovery error for " + normalized + ": " + (args != null && args.length > 0 ? args[0] : "unknown"));
-                                }
-                                return null;
-                            }
-                    );
-
-                    try {
-                        final Method reqAvail = uceAdapter.getClass().getMethod("requestAvailability", Uri.class, Executor.class, callbackClass);
-                        reqAvail.invoke(uceAdapter, contactUri, context.getMainExecutor(), callbackProxy);
-                        LogUtil.i(TAG, "Successfully requested UCE requestAvailability for " + normalized);
-                    } catch (Exception e) {
-                        try {
-                            final Method reqCaps = uceAdapter.getClass().getMethod("requestCapabilities", java.util.List.class, Executor.class, callbackClass);
-                            reqCaps.invoke(uceAdapter, java.util.Collections.singletonList(contactUri), context.getMainExecutor(), callbackProxy);
-                            LogUtil.i(TAG, "Successfully requested UCE requestCapabilities for " + normalized);
-                        } catch (Exception ex) {
-                            LogUtil.w(TAG, "Platform UCE method invocation failed for " + normalized + ": " + ex.getMessage());
+                final List<Uri> uris = new ArrayList<>();
+                for (String dest : destinations) {
+                    final String norm = normalizeDestination(context, dest);
+                    if (!TextUtils.isEmpty(norm)) {
+                        final Uri contactUri = Uri.parse("tel:" + norm);
+                        if (!uris.contains(contactUri)) {
+                            uris.add(contactUri);
                         }
                     }
-                } else {
-                    final SipStackManager sipManager = RcsManager.getInstance(context).getSipStackManager();
-                    if (sipManager != null) {
-                        sipManager.sendOptions(normalized);
-                    }
+                }
+                if (uris.isEmpty()) return;
+
+                LogUtil.i(TAG, "Submitting batch platform UCE capability discovery for " + uris.size() + " contacts");
+                final Class<?> callbackClass = Class.forName("android.telephony.ims.RcsUceAdapter$CapabilitiesCallback");
+
+                final Object callbackProxy = Proxy.newProxyInstance(
+                        context.getClassLoader(),
+                        new Class<?>[] { callbackClass },
+                        (proxy, method, args) -> {
+                            final String methodName = method.getName();
+                            LogUtil.i(TAG, "Batch UCE proxy callback invoked: " + methodName);
+
+                            if ("onCapabilitiesReceived".equals(methodName)) {
+                                final Object arg = (args != null && args.length > 0) ? args[0] : null;
+                                if (arg instanceof List) {
+                                    final List<?> capabilitiesList = (List<?>) arg;
+                                    for (Object capObj : capabilitiesList) {
+                                        if (capObj == null) continue;
+                                        try {
+                                            String contactDest = null;
+                                            try {
+                                                final Method getUriMethod = capObj.getClass().getMethod("getContactHeader");
+                                                final Uri headerUri = (Uri) getUriMethod.invoke(capObj);
+                                                if (headerUri != null) contactDest = headerUri.getSchemeSpecificPart();
+                                            } catch (Exception ignored) {}
+
+                                            boolean isCapable = true;
+                                            try {
+                                                final Method isCapableMethod = capObj.getClass().getMethod("isCapable", int.class);
+                                                final Boolean capRes = (Boolean) isCapableMethod.invoke(capObj, 1);
+                                                if (capRes != null) isCapable = capRes;
+                                            } catch (Exception ignored) {}
+
+                                            if (contactDest != null) {
+                                                final int resCap = isCapable ? CAPABILITY_RCS_SUPPORTED : CAPABILITY_NOT_SUPPORTED;
+                                                updateCapability(context, contactDest, resCap);
+                                                LogUtil.i(TAG, "Batch resolved RCS capability for " + contactDest + " -> " + resCap);
+                                            }
+                                        } catch (Exception e) {
+                                            LogUtil.w(TAG, "Error parsing batch contact capability item: " + e.getMessage());
+                                        }
+                                    }
+                                }
+                            } else if ("onError".equals(methodName)) {
+                                LogUtil.w(TAG, "Batch UCE discovery error: " + (args != null && args.length > 0 ? args[0] : "unknown"));
+                            }
+                            return null;
+                        }
+                );
+
+                try {
+                    final Method reqCaps = uceAdapter.getClass().getMethod("requestCapabilities", List.class, Executor.class, callbackClass);
+                    reqCaps.invoke(uceAdapter, uris, context.getMainExecutor(), callbackProxy);
+                    LogUtil.i(TAG, "Successfully executed batch UCE requestCapabilities for " + uris.size() + " URIs");
+                } catch (Exception e) {
+                    LogUtil.w(TAG, "Batch UCE method invocation failed: " + e.getMessage());
                 }
             } catch (Exception e) {
-                LogUtil.w(TAG, "Platform UCE request failed for " + normalized + ": " + e.getMessage());
+                LogUtil.w(TAG, "Batch UCE discovery failed: " + e.getMessage());
             }
         });
+    }
+
+    /**
+     * Triggers asynchronous RCS capability discovery via platform Telephony RcsUceAdapter for single contact.
+     */
+    public static void requestPlatformCapabilityDiscovery(Context context, String destination) {
+        final List<String> singleList = new ArrayList<>();
+        singleList.add(destination);
+        requestBatchCapabilityDiscovery(context, singleList);
     }
 
     /**

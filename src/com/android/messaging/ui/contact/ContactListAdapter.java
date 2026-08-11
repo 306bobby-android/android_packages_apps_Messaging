@@ -66,6 +66,19 @@ public class ContactListAdapter extends CursorAdapter implements SectionIndexer 
     @Override
     public Cursor swapCursor(final Cursor newCursor) {
         mSectionIndexer = new ContactSectionIndexer(newCursor);
+        if (newCursor != null && newCursor.moveToFirst()) {
+            final java.util.List<String> destinations = new java.util.ArrayList<>();
+            do {
+                final String number = newCursor.getString(com.android.messaging.util.ContactUtil.INDEX_PHONE_EMAIL);
+                if (!android.text.TextUtils.isEmpty(number)) {
+                    destinations.add(number);
+                }
+            } while (newCursor.moveToNext());
+            newCursor.moveToFirst();
+            if (!destinations.isEmpty()) {
+                com.android.messaging.rcs.uce.CapabilityDiscoveryManager.requestBatchCapabilityDiscovery(mContext, destinations);
+            }
+        }
         return super.swapCursor(newCursor);
     }
 
