@@ -173,12 +173,12 @@ public class CapabilityDiscoveryManager {
         }
 
         final String normalized = normalizeDestination(context, destination);
-        LogUtil.i(TAG, "[DEEP LOG] getCachedCapability: In-memory MISS for " + normalized + ", scheduling async database lookup");
+        LogUtil.i(TAG, "[DEEP LOG] getCachedCapability: In-memory MISS for " + normalized + ", performing synchronous database lookup");
 
-        // Query database on background thread if uncached
-        sAsyncExecutor.execute(() -> {
-            try {
-                final DatabaseWrapper db = DataModel.get().getDatabase();
+        // Query database synchronously so capability is available immediately for UI rendering
+        try {
+            final DatabaseWrapper db = DataModel.get().getDatabase();
+            if (db != null) {
                 Cursor cursor = null;
                 try {
                     final String dbDigits = normalized.replaceAll("[^0-9]", "");
@@ -192,15 +192,18 @@ public class CapabilityDiscoveryManager {
                     if (cursor != null && cursor.moveToFirst()) {
                         final int capability = cursor.getInt(0);
                         final long timestamp = cursor.getLong(1);
-                        final long ageMs = System.currentTimeMillis() - timestamp;
+                        final long ageMs = timestamp > 0 ? (System.currentTimeMillis() - timestamp) : 0;
                         LogUtil.i(TAG, "[DEEP LOG DB] Found DB row for suffix '%" + dbSuffix + "': rcs_capability="
                                 + capabilityToString(capability) + " (" + capability + "), timestamp=" + timestamp + " (age=" + ageMs + "ms)");
 
-                        if (ageMs < CAPABILITY_CACHE_VALIDITY_MS) {
+                        if (capability != CAPABILITY_UNKNOWN && (timestamp == 0 || ageMs < CAPABILITY_CACHE_VALIDITY_MS)) {
                             synchronized (sCapabilityCache) {
                                 sCapabilityCache.put(normalized, capability);
                             }
-                            LogUtil.i(TAG, "[DEEP LOG DB] Population of in-memory cache SUCCESS for " + normalized + " -> " + capabilityToString(capability));
+                            LogUtil.i(TAG, "[DEEP LOG DB] Synchronous cache population SUCCESS for " + normalized + " -> " + capabilityToString(capability));
+                            return capability;
+                        } else if (capability == CAPABILITY_UNKNOWN) {
+                            LogUtil.d(TAG, "[DEEP LOG DB] DB capability is UNKNOWN for " + normalized);
                         } else {
                             LogUtil.w(TAG, "[DEEP LOG DB] DB entry for " + normalized + " is EXPIRED (age " + ageMs + "ms > validity " + CAPABILITY_CACHE_VALIDITY_MS + "ms)");
                         }
@@ -210,10 +213,10 @@ public class CapabilityDiscoveryManager {
                 } finally {
                     if (cursor != null) cursor.close();
                 }
-            } catch (Exception e) {
-                LogUtil.e(TAG, "[DEEP LOG DB] Error querying RCS capability cache in database", e);
             }
-        });
+        } catch (Exception e) {
+            LogUtil.e(TAG, "[DEEP LOG DB] Error querying RCS capability cache in database", e);
+        }
 
         return CAPABILITY_UNKNOWN;
     }
