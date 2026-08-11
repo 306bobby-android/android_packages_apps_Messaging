@@ -99,7 +99,6 @@ public class SipStackManager {
                     LogUtil.i(TAG, "Initializing SIPoUDP DatagramSocket to " + mTargetAddress.getHostAddress());
                     mUdpSocket = new DatagramSocket();
                     bindSocketToCellularOrIms(mUdpSocket);
-                    mUdpSocket.connect(mTargetAddress, mTargetPort);
                     mUdpSocket.setSoTimeout(15000);
                     mIsConnected.set(true);
                     startUdpReaderThread();
@@ -297,6 +296,7 @@ public class SipStackManager {
                 } catch (Exception e) {
                     if (mIsConnected.get()) {
                         LogUtil.w(TAG, "UDP receive timeout/exception: " + e.getMessage());
+                        try { Thread.sleep(500); } catch (InterruptedException ignored) {}
                     }
                 }
             }
