@@ -100,11 +100,20 @@ public class SipStackManager {
 
                 mUseUdp = (mTargetPort == 5060); // Use UDP for port 5060 (SIPoUDP)
 
+                final Network cellularNet = getCellularNetwork(mContext);
+
                 if (mUseUdp) {
                     LogUtil.i(TAG, "Initializing SIPoUDP DatagramSocket to " + mTargetAddress.getHostAddress());
                     mUdpSocket = new DatagramSocket();
-                    if (sCellularNetwork != null) {
-                        try { sCellularNetwork.bindSocket(mUdpSocket); LogUtil.i(TAG, "Bound UDP socket to cellular network"); } catch (Exception ignored) {}
+                    if (cellularNet != null) {
+                        try {
+                            cellularNet.bindSocket(mUdpSocket);
+                            LogUtil.i(TAG, "Successfully bound UDP socket to cellular network interface: " + cellularNet);
+                        } catch (Exception e) {
+                            LogUtil.w(TAG, "Failed to bind UDP socket to cellular network", e);
+                        }
+                    } else {
+                        LogUtil.w(TAG, "No cellular network interface found for UDP socket binding!");
                     }
                     mUdpSocket.setSoTimeout(10000);
                     mIsConnected.set(true);
@@ -117,8 +126,13 @@ public class SipStackManager {
                     } else {
                         mTcpSocket = new Socket();
                     }
-                    if (sCellularNetwork != null) {
-                        try { sCellularNetwork.bindSocket(mTcpSocket); LogUtil.i(TAG, "Bound TCP socket to cellular network"); } catch (Exception ignored) {}
+                    if (cellularNet != null) {
+                        try {
+                            cellularNet.bindSocket(mTcpSocket);
+                            LogUtil.i(TAG, "Successfully bound TCP socket to cellular network interface: " + cellularNet);
+                        } catch (Exception e) {
+                            LogUtil.w(TAG, "Failed to bind TCP socket to cellular network", e);
+                        }
                     }
                     mTcpSocket.connect(new InetSocketAddress(mTargetAddress, mTargetPort), 10000);
                     mInputStream = mTcpSocket.getInputStream();
@@ -160,18 +174,29 @@ public class SipStackManager {
         }).start();
     }
 
-    private static InetAddress[] resolveOverCellular(Context context, String host) {
+    private static Network getCellularNetwork(Context context) {
         try {
             final ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
-            if (cm == null) return null;
-
-            final Network[] networks = cm.getAllNetworks();
-            for (Network network : networks) {
-                final NetworkCapabilities caps = cm.getNetworkCapabilities(network);
-                if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
-                    sCellularNetwork = network;
-                    return network.getAllByName(host);
+            if (cm != null) {
+                for (Network network : cm.getAllNetworks()) {
+                    final NetworkCapabilities caps = cm.getNetworkCapabilities(network);
+                    if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
+                        sCellularNetwork = network;
+                        return network;
+                    }
                 }
+            }
+        } catch (Exception e) {
+            LogUtil.w(TAG, "Error looking up cellular network", e);
+        }
+        return null;
+    }
+
+    private static InetAddress[] resolveOverCellular(Context context, String host) {
+        try {
+            final Network net = getCellularNetwork(context);
+            if (net != null) {
+                return net.getAllByName(host);
             }
         } catch (Exception e) {
             LogUtil.e(TAG, "Cellular DNS resolution failed", e);
