@@ -342,7 +342,15 @@ public class SipStackManager {
                 sendRegister(nonce, realm);
             }
         } else if (message.startsWith("SIP/2.0 200")) {
-            LogUtil.i(TAG, "SIP Registration Successful (200 OK)");
+            LogUtil.i(TAG, "SIP 200 OK Received");
+            if (message.contains("OPTIONS")) {
+                final String toHeader = extractHeaderValue(message, "To: <sip:", "@");
+                if (toHeader != null) {
+                    com.android.messaging.rcs.uce.CapabilityDiscoveryManager.updateCapability(mContext, toHeader,
+                            com.android.messaging.rcs.uce.CapabilityDiscoveryManager.CAPABILITY_RCS_SUPPORTED);
+                    LogUtil.i(TAG, "SIP OPTIONS confirmed RCS capability for: " + toHeader);
+                }
+            }
         }
     }
 
