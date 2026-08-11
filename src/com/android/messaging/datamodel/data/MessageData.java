@@ -310,6 +310,22 @@ public class MessageData implements Parcelable {
     }
 
     /**
+     * Create an incoming RCS message
+     */
+    public static MessageData createRcsMessage(final String senderUri, final String messageText,
+            final long timestamp, final String rcsMessageId) {
+        final MessageData message = new MessageData();
+        message.mProtocol = PROTOCOL_RCS;
+        message.mStatus = BUGLE_STATUS_INCOMING_COMPLETE;
+        message.mReceivedTimestamp = timestamp;
+        message.mSentTimestamp = timestamp;
+        message.mParts.add(MessagePartData.createTextMessagePart(messageText));
+        message.mSeen = false;
+        message.mRead = false;
+        return message;
+    }
+
+    /**
      * Create a message not yet associated with a particular conversation
      */
     public static MessageData createSharedMessage(final String messageText,
