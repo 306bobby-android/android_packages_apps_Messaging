@@ -29,9 +29,13 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.NetworkInterface;
 import java.net.Socket;
+import java.util.Collections;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -189,6 +193,28 @@ public class SipStackManager {
         return null;
     }
 
+    private static String getLocalCellularIpAddress() {
+        try {
+            final List<NetworkInterface> interfaces = Collections.list(NetworkInterface.getNetworkInterfaces());
+            for (NetworkInterface intf : interfaces) {
+                if (intf.isUp() && !intf.isLoopback()) {
+                    for (InetAddress addr : Collections.list(intf.getInetAddresses())) {
+                        if (!addr.isLoopbackAddress() && addr instanceof Inet6Address) {
+                            String host = addr.getHostAddress();
+                            if (host.contains("%")) {
+                                host = host.substring(0, host.indexOf("%"));
+                            }
+                            if (!host.startsWith("fe80")) { // Ignore link-local
+                                return host;
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
     /**
      * Constructs and transmits a SIP REGISTER request.
      */
@@ -216,6 +242,14 @@ public class SipStackManager {
                     localIp = mTcpSocket.getLocalAddress().getHostAddress();
                 }
                 localPort = mTcpSocket.getLocalPort();
+            }
+
+            if (localIp == null || localIp.equals("127.0.0.1") || localIp.equals("0.0.0.0")
+                    || localIp.equals("::") || localIp.equals("0:0:0:0:0:0:0:0")) {
+                final String cellularIp = getLocalCellularIpAddress();
+                if (cellularIp != null) {
+                    localIp = cellularIp;
+                }
             }
 
             // Format IPv6 address string with brackets if applicable
