@@ -62,6 +62,7 @@ public class SipStackManager {
     private OutputStream mOutputStream;
 
     private boolean mUseUdp = true; // Default for carrier SIPoUDP
+    private static Network sCellularNetwork;
     private final AtomicBoolean mIsConnected = new AtomicBoolean(false);
     private long mCSeq = 1;
 
@@ -102,6 +103,9 @@ public class SipStackManager {
                 if (mUseUdp) {
                     LogUtil.i(TAG, "Initializing SIPoUDP DatagramSocket to " + mTargetAddress.getHostAddress());
                     mUdpSocket = new DatagramSocket();
+                    if (sCellularNetwork != null) {
+                        try { sCellularNetwork.bindSocket(mUdpSocket); LogUtil.i(TAG, "Bound UDP socket to cellular network"); } catch (Exception ignored) {}
+                    }
                     mUdpSocket.setSoTimeout(10000);
                     mIsConnected.set(true);
                     startUdpReaderThread();
@@ -112,6 +116,9 @@ public class SipStackManager {
                         mTcpSocket = factory.createSocket();
                     } else {
                         mTcpSocket = new Socket();
+                    }
+                    if (sCellularNetwork != null) {
+                        try { sCellularNetwork.bindSocket(mTcpSocket); LogUtil.i(TAG, "Bound TCP socket to cellular network"); } catch (Exception ignored) {}
                     }
                     mTcpSocket.connect(new InetSocketAddress(mTargetAddress, mTargetPort), 10000);
                     mInputStream = mTcpSocket.getInputStream();
@@ -162,6 +169,7 @@ public class SipStackManager {
             for (Network network : networks) {
                 final NetworkCapabilities caps = cm.getNetworkCapabilities(network);
                 if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
+                    sCellularNetwork = network;
                     return network.getAllByName(host);
                 }
             }
