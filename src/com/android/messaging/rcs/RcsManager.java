@@ -17,11 +17,14 @@
 package com.android.messaging.rcs;
 
 import android.content.Context;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.telephony.SubscriptionManager;
 import android.telephony.ims.ImsManager;
+
 import android.telephony.ims.ImsRcsManager;
+import android.telephony.ims.ImsStateCallback;
 import android.telephony.ims.RcsUceAdapter;
 
 import com.android.messaging.rcs.acs.AcsClient;
@@ -53,6 +56,7 @@ public class RcsManager {
     private String mLastErrorReason;
     private AcsConfig mAcsConfig;
     private SipStackManager mSipStackManager;
+    private RcsUceAdapter mPlatformUceAdapter;
     private final List<RcsStateListener> mListeners = new ArrayList<>();
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
 
@@ -99,7 +103,7 @@ public class RcsManager {
     }
 
     public boolean isRcsAvailable() {
-        return mState == STATE_REGISTERED && mAcsConfig != null && mAcsConfig.isRcsEnabled();
+        return mState == STATE_REGISTERED && (mAcsConfig != null && mAcsConfig.isRcsEnabled() || mPlatformUceAdapter != null);
     }
 
     /**
@@ -119,8 +123,13 @@ public class RcsManager {
 
             @Override
             public void onError(String errorReason) {
-                notifyStateChanged(STATE_DISCONNECTED, errorReason);
-                LogUtil.e(TAG, "ACS Provisioning failed: " + errorReason);
+                if (mPlatformUceAdapter != null) {
+                    LogUtil.i(TAG, "ACS Provisioning error, using platform ImsRcsManager state");
+                    notifyStateChanged(STATE_REGISTERED, null);
+                } else {
+                    notifyStateChanged(STATE_DISCONNECTED, errorReason);
+                    LogUtil.e(TAG, "ACS Provisioning failed: " + errorReason);
+                }
             }
         });
     }
@@ -167,6 +176,26 @@ public class RcsManager {
                     final RcsUceAdapter uceAdapter = rcsManager.getUceAdapter();
                     if (uceAdapter != null) {
                         LogUtil.i(TAG, "RcsUceAdapter active for capability exchange");
+                        mPlatformUceAdapter = uceAdapter;
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        rcsManager.registerImsStateCallback(mContext.getMainExecutor(), new ImsStateCallback() {
+                            @Override
+                            public void onUnavailable(int reason) {
+                                LogUtil.w(TAG, "Platform IMS RCS Unavailable reason: " + reason);
+                            }
+
+                            @Override
+                            public void onAvailable() {
+                                LogUtil.i(TAG, "Platform IMS RCS Connected and Available!");
+                                notifyStateChanged(STATE_REGISTERED, null);
+                            }
+
+                            @Override
+                            public void onError() {
+                                LogUtil.e(TAG, "Platform IMS RCS error");
+                            }
+                        });
                     }
                 }
             }
@@ -181,5 +210,9 @@ public class RcsManager {
 
     public SipStackManager getSipStackManager() {
         return mSipStackManager;
+    }
+
+    public RcsUceAdapter getPlatformUceAdapter() {
+        return mPlatformUceAdapter;
     }
 }
