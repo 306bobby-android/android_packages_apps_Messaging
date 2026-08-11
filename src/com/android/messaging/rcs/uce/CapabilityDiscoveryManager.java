@@ -80,28 +80,38 @@ public class CapabilityDiscoveryManager {
     }
 
     /**
-     * Checks if a destination phone number is an RCS recipient.
-     */
-    /**
-     * Checks if a destination phone number is an RCS recipient.
+     * Checks if a destination phone number is a cached RCS recipient.
+     * Does NOT trigger network discovery (pure cache lookup for UI styling).
      */
     public static boolean isRcsRecipient(Context context, String destination) {
         final String normalized = normalizeDestination(context, destination);
+        if (TextUtils.isEmpty(normalized)) return false;
+
+        final int cap = getCachedCapability(context, normalized);
+        return (cap == CAPABILITY_RCS_SUPPORTED);
+    }
+
+    /**
+     * Called ONLY when a contact is selected or added to the recipient input field.
+     * Logs the ENTIRE discovery process heavily and triggers network capability discovery if UNKNOWN.
+     */
+    public static boolean onRecipientSelected(Context context, String destination) {
+        final String normalized = normalizeDestination(context, destination);
         final String caller = getCallerSummary();
         LogUtil.i(TAG, "==========================================================================");
-        LogUtil.i(TAG, "[DEEP LOG] isRcsRecipient() CALLED");
-        LogUtil.i(TAG, "[DEEP LOG]   - Caller: " + caller);
-        LogUtil.i(TAG, "[DEEP LOG]   - Raw Destination: '" + destination + "'");
-        LogUtil.i(TAG, "[DEEP LOG]   - Normalized: '" + normalized + "'");
+        LogUtil.i(TAG, "[RECIPIENT SELECTED] Contact added to recipient field!");
+        LogUtil.i(TAG, "[RECIPIENT SELECTED]   - Caller: " + caller);
+        LogUtil.i(TAG, "[RECIPIENT SELECTED]   - Raw Destination: '" + destination + "'");
+        LogUtil.i(TAG, "[RECIPIENT SELECTED]   - Normalized: '" + normalized + "'");
 
         if (TextUtils.isEmpty(normalized)) {
-            LogUtil.d(TAG, "[DEEP LOG]   -> Empty normalized destination, returning FALSE");
+            LogUtil.d(TAG, "[RECIPIENT SELECTED]   -> Empty normalized destination, defaulting UI to SMS");
             LogUtil.i(TAG, "==========================================================================");
             return false;
         }
 
         final int cap = getCachedCapability(context, normalized);
-        LogUtil.i(TAG, "[DEEP LOG]   - Resolved Capability: " + capabilityToString(cap) + " (" + cap + ")");
+        LogUtil.i(TAG, "[RECIPIENT SELECTED]   - Cached Capability: " + capabilityToString(cap) + " (" + cap + ")");
 
         if (cap == CAPABILITY_UNKNOWN) {
             boolean shouldDiscover = false;
@@ -118,24 +128,25 @@ public class CapabilityDiscoveryManager {
                 }
             }
 
-            LogUtil.i(TAG, "[DEEP LOG]   - Capability is UNKNOWN!");
-            LogUtil.i(TAG, "[DEEP LOG]   - Debounce Check: lastDiscoveryTime=" + (elapsed >= 0 ? elapsed + "ms ago" : "NEVER")
+            LogUtil.i(TAG, "[RECIPIENT SELECTED]   - Capability is UNKNOWN!");
+            LogUtil.i(TAG, "[RECIPIENT SELECTED]   - Debounce Check: lastDiscoveryTime=" + (elapsed >= 0 ? elapsed + "ms ago" : "NEVER")
                     + ", minInterval=" + MIN_DISCOVERY_INTERVAL_MS + "ms -> shouldDiscover=" + shouldDiscover);
 
             if (shouldDiscover) {
-                LogUtil.i(TAG, "[DEEP LOG]   -> Triggering platform capability discovery for " + normalized + " (defaulting UI to SMS)");
+                LogUtil.i(TAG, "===== RECIPIENT DISCOVERY PROCESS START FOR: " + normalized + " =====");
+                LogUtil.i(TAG, "[RECIPIENT SELECTED]   -> Triggering network capability discovery for " + normalized + " (defaulting UI to SMS)");
                 requestPlatformCapabilityDiscovery(context, normalized);
             } else {
-                LogUtil.i(TAG, "[DEEP LOG]   -> Discovery DEBOUNCED for " + normalized + " (last request was " + elapsed + "ms ago, threshold " + MIN_DISCOVERY_INTERVAL_MS + "ms)");
+                LogUtil.i(TAG, "[RECIPIENT SELECTED]   -> Discovery DEBOUNCED for " + normalized + " (last request was " + elapsed + "ms ago)");
             }
             LogUtil.i(TAG, "==========================================================================");
             return false;
         }
 
-        final boolean result = (cap == CAPABILITY_RCS_SUPPORTED);
-        LogUtil.i(TAG, "[DEEP LOG]   -> Returning isRcs=" + result + " for " + normalized);
+        final boolean isRcs = (cap == CAPABILITY_RCS_SUPPORTED);
+        LogUtil.i(TAG, "[RECIPIENT SELECTED]   -> Selection Result: isRcs=" + isRcs + " for " + normalized);
         LogUtil.i(TAG, "==========================================================================");
-        return result;
+        return isRcs;
     }
 
     private static String getCallerSummary() {

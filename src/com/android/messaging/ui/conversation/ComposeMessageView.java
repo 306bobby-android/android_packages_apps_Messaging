@@ -737,11 +737,11 @@ public class ComposeMessageView extends LinearLayout
                 if (other != null) {
                     dest = other.getNormalizedDestination();
                     LogUtil.i("ComposeMessageView", "RCS check for dest=" + dest);
-                    if (com.android.messaging.rcs.uce.CapabilityDiscoveryManager.isRcsRecipient(getContext(), dest)) {
+                    if (com.android.messaging.rcs.uce.CapabilityDiscoveryManager.onRecipientSelected(getContext(), dest)) {
                         isRecipientRcs = true;
                         LogUtil.i("ComposeMessageView", "Recipient " + dest + " IS RCS capable — switching to RCS mode");
                     } else {
-                        LogUtil.i("ComposeMessageView", "Recipient " + dest + " is NOT RCS — staying in SMS mode");
+                        LogUtil.i("ComposeMessageView", "Recipient " + dest + " is NOT RCS or UNKNOWN — staying in SMS mode");
                     }
                 } else {
                     LogUtil.d("ComposeMessageView", "No other participant found, defaulting to SMS");

@@ -269,6 +269,9 @@ public class ContactPickerFragment extends Fragment implements ContactPickerData
                 mPendingExplodeView = view;
             }
             mRecipientTextView.appendRecipientEntry(item.getRecipientEntry());
+            if (item.getRecipientEntry() != null && item.getRecipientEntry().getDestination() != null) {
+                com.android.messaging.rcs.uce.CapabilityDiscoveryManager.onRecipientSelected(getActivity(), item.getRecipientEntry().getDestination());
+            }
         } else if (mContactPickingMode != MODE_PICK_INITIAL_CONTACT) {
             mRecipientTextView.removeRecipientEntry(item.getRecipientEntry());
         }
