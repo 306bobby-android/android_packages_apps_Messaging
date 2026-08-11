@@ -347,6 +347,7 @@ public class CapabilityDiscoveryManager {
                             } else if ("onError".equals(methodName)) {
                                 final Object errArg = (args != null && args.length > 0) ? args[0] : "unknown";
                                 LogUtil.w(TAG, "[EXACT UCE ERROR] onError() callback fired with error code/arg: " + errArg);
+                                LogUtil.i(TAG, "[EXACT UCE ERROR] Modem returned error code " + errArg + " (COMMAND_CODE_NOT_SUPPORTED=10). Preserving contact capability and attempting SIP OPTIONS fallback.");
                                 final SipStackManager sipManager = RcsManager.getInstance(context).getSipStackManager();
                                 for (Uri requestedUri : uris) {
                                     final String reqDest = requestedUri.getSchemeSpecificPart();
@@ -355,7 +356,6 @@ public class CapabilityDiscoveryManager {
                                         if (sipManager != null) {
                                             sipManager.sendOptions(reqDest);
                                         }
-                                        updateCapability(context, reqDest, CAPABILITY_NOT_SUPPORTED);
                                     }
                                 }
                             }
