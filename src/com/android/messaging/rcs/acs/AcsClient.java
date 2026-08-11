@@ -21,6 +21,8 @@ import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
+import android.net.Uri;
+import android.os.Build;
 import android.telephony.TelephonyManager;
 import android.text.TextUtils;
 import android.util.Xml;
@@ -33,6 +35,8 @@ import org.xmlpull.v1.XmlPullParser;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * GSMA RCC.14 / RCC.60 Auto-Configuration Server (ACS) HTTP Provisioning Client.
@@ -58,73 +62,83 @@ public class AcsClient {
                     return;
                 }
 
-                // Check for custom override URL in preferences
                 final String customUrl = BuglePrefs.getApplicationPrefs().getString("pref_key_rcs_custom_acs_url", null);
-                String acsUrl;
+                final String simOperator = tm.getSimOperator(); // e.g. 310260 (MCC 310, MNC 260)
 
+                if (TextUtils.isEmpty(customUrl) && (simOperator == null || simOperator.length() < 5)) {
+                    callback.onError("No SIM inserted or invalid operator (MCC/MNC)");
+                    return;
+                }
+
+                // Build GSMA RCC.14 Query Parameters
+                final String query = buildGsmaQueryString(tm, otpToken);
+
+                final List<String> candidateUrls = new ArrayList<>();
                 if (!TextUtils.isEmpty(customUrl)) {
-                    acsUrl = customUrl;
-                    LogUtil.i(TAG, "Using custom ACS endpoint override: " + acsUrl);
+                    final String urlWithQuery = customUrl + (customUrl.contains("?") ? "&" : "?") + query;
+                    candidateUrls.add(urlWithQuery);
                 } else {
-                    final String simOperator = tm.getSimOperator(); // e.g. 310260 (MCC 310, MNC 260)
-                    if (simOperator == null || simOperator.length() < 5) {
-                        callback.onError("No SIM inserted or invalid operator (MCC/MNC)");
-                        return;
-                    }
-
                     final String mcc = simOperator.substring(0, 3);
                     final String mnc = simOperator.substring(3);
-
-                    // Standard GSMA RCC.14 FQDN endpoint: config.rcs.mnc<MNC>.mcc<MCC>.pub.3gppnetwork.org
-                    acsUrl = String.format("https://config.rcs.mnc%03d.mcc%03d.pub.3gppnetwork.org/rcs/config/v1",
+                    final String baseFqdn = String.format("https://config.rcs.mnc%03d.mcc%03d.pub.3gppnetwork.org",
                             Integer.parseInt(mnc), Integer.parseInt(mcc));
+
+                    candidateUrls.add(baseFqdn + "/rcs/config/v1?" + query);
+                    candidateUrls.add(baseFqdn + "/?" + query);
+                    candidateUrls.add(baseFqdn + "/rcs/config/v2?" + query);
                 }
 
-                if (otpToken != null && !otpToken.isEmpty()) {
-                    acsUrl += (acsUrl.contains("?") ? "&" : "?") + "OTP=" + otpToken;
-                }
+                int lastResponseCode = -1;
+                String lastErrorMessage = null;
 
-                LogUtil.i(TAG, "Connecting to ACS endpoint: " + acsUrl);
-                final URL url = new URL(acsUrl);
+                for (String acsUrl : candidateUrls) {
+                    LogUtil.i(TAG, "Trying ACS endpoint: " + acsUrl);
+                    final URL url = new URL(acsUrl);
 
-                // Attempt HTTP connection over default network first
-                HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
-                urlConnection.setRequestMethod("GET");
-                urlConnection.setRequestProperty("User-Agent", USER_AGENT);
-                urlConnection.setConnectTimeout(10000);
-                urlConnection.setReadTimeout(10000);
+                    HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("GET");
+                    conn.setRequestProperty("User-Agent", USER_AGENT);
+                    conn.setRequestProperty("Accept", "application/vnd.gsma.rcs-config+xml, application/xml, text/xml");
+                    conn.setConnectTimeout(10000);
+                    conn.setReadTimeout(10000);
 
-                int responseCode;
-                try {
-                    responseCode = urlConnection.getResponseCode();
-                } catch (Exception connEx) {
-                    LogUtil.w(TAG, "Connection failed over default network, trying cellular interface...", connEx);
-                    urlConnection.disconnect();
+                    try {
+                        lastResponseCode = conn.getResponseCode();
+                    } catch (Exception connEx) {
+                        LogUtil.w(TAG, "Connection failed over default network, trying cellular interface for: " + acsUrl, connEx);
+                        conn.disconnect();
 
-                    // Try binding to cellular network for IMS / ACS routing
-                    urlConnection = connectOverCellular(context, url);
-                    if (urlConnection == null) {
-                        callback.onError("Network error: " + connEx.getMessage());
-                        return;
+                        conn = connectOverCellular(context, url);
+                        if (conn == null) {
+                            lastErrorMessage = "Network error: " + connEx.getMessage();
+                            continue;
+                        }
+                        lastResponseCode = conn.getResponseCode();
                     }
-                    responseCode = urlConnection.getResponseCode();
-                }
 
-                if (responseCode == HttpURLConnection.HTTP_OK) {
-                    final InputStream inputStream = urlConnection.getInputStream();
-                    final AcsConfig config = parseAcsXml(inputStream);
-                    inputStream.close();
+                    LogUtil.i(TAG, "ACS endpoint returned response code: " + lastResponseCode);
 
-                    if (config != null && config.isValid()) {
-                        LogUtil.i(TAG, "ACS Provisioning successful for domain: " + config.getSipDomain());
-                        callback.onSuccess(config);
+                    if (lastResponseCode == HttpURLConnection.HTTP_OK) {
+                        final InputStream inputStream = conn.getInputStream();
+                        final AcsConfig config = parseAcsXml(inputStream);
+                        inputStream.close();
+                        conn.disconnect();
+
+                        if (config != null && config.isValid()) {
+                            LogUtil.i(TAG, "ACS Provisioning successful for domain: " + config.getSipDomain());
+                            callback.onSuccess(config);
+                            return;
+                        } else {
+                            callback.onError("Failed to parse valid ACS XML configuration");
+                            return;
+                        }
                     } else {
-                        callback.onError("Failed to parse valid ACS XML configuration");
+                        lastErrorMessage = "Carrier ACS returned HTTP error " + lastResponseCode;
+                        conn.disconnect();
                     }
-                } else {
-                    callback.onError("Carrier ACS returned HTTP error " + responseCode);
                 }
-                urlConnection.disconnect();
+
+                callback.onError(lastErrorMessage != null ? lastErrorMessage : "Carrier ACS returned HTTP error " + lastResponseCode);
             } catch (Exception e) {
                 LogUtil.e(TAG, "ACS request failed", e);
                 callback.onError(e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
@@ -132,15 +146,43 @@ public class AcsClient {
         }).start();
     }
 
+    /**
+     * Formats mandatory GSMA RCC.14 query string parameters.
+     */
+    private static String buildGsmaQueryString(TelephonyManager tm, String otpToken) {
+        final StringBuilder sb = new StringBuilder();
+        sb.append("vers=0");
+        sb.append("&client_vendor=GSMA");
+        sb.append("&client_version=UP_2.4");
+        sb.append("&terminal_vendor=").append(Uri.encode(Build.MANUFACTURER));
+        sb.append("&terminal_model=").append(Uri.encode(Build.MODEL));
+        sb.append("&terminal_sw_version=").append(Uri.encode(Build.DISPLAY));
+
+        try {
+            final String imsi = tm.getSubscriberId();
+            if (imsi != null && !imsi.isEmpty()) {
+                sb.append("&IMSI=").append(Uri.encode(imsi));
+            }
+        } catch (SecurityException ignored) {}
+
+        try {
+            final String imei = tm.getDeviceId();
+            if (imei != null && !imei.isEmpty()) {
+                sb.append("&IMEI=").append(Uri.encode(imei));
+            }
+        } catch (SecurityException ignored) {}
+
+        if (otpToken != null && !otpToken.isEmpty()) {
+            sb.append("&token=").append(Uri.encode(otpToken));
+        }
+
+        return sb.toString();
+    }
+
     private static HttpURLConnection connectOverCellular(Context context, URL url) {
         try {
             final ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
             if (cm == null) return null;
-
-            final NetworkRequest request = new NetworkRequest.Builder()
-                    .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
-                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                    .build();
 
             final Network[] networks = cm.getAllNetworks();
             for (Network network : networks) {
@@ -149,6 +191,7 @@ public class AcsClient {
                     final HttpURLConnection conn = (HttpURLConnection) network.openConnection(url);
                     conn.setRequestMethod("GET");
                     conn.setRequestProperty("User-Agent", USER_AGENT);
+                    conn.setRequestProperty("Accept", "application/vnd.gsma.rcs-config+xml, application/xml, text/xml");
                     conn.setConnectTimeout(10000);
                     conn.setReadTimeout(10000);
                     return conn;
