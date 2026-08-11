@@ -17,9 +17,15 @@
 package com.android.messaging.rcs.acs;
 
 import android.content.Context;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.NetworkRequest;
 import android.telephony.TelephonyManager;
+import android.text.TextUtils;
 import android.util.Xml;
 
+import com.android.messaging.util.BuglePrefs;
 import com.android.messaging.util.LogUtil;
 
 import org.xmlpull.v1.XmlPullParser;
@@ -52,32 +58,58 @@ public class AcsClient {
                     return;
                 }
 
-                final String simOperator = tm.getSimOperator(); // e.g. 310260 (MCC 310, MNC 260)
-                if (simOperator == null || simOperator.length() < 5) {
-                    callback.onError("Invalid SIM Operator");
-                    return;
+                // Check for custom override URL in preferences
+                final String customUrl = BuglePrefs.getApplicationPrefs().getString("pref_key_rcs_custom_acs_url", null);
+                String acsUrl;
+
+                if (!TextUtils.isEmpty(customUrl)) {
+                    acsUrl = customUrl;
+                    LogUtil.i(TAG, "Using custom ACS endpoint override: " + acsUrl);
+                } else {
+                    final String simOperator = tm.getSimOperator(); // e.g. 310260 (MCC 310, MNC 260)
+                    if (simOperator == null || simOperator.length() < 5) {
+                        callback.onError("No SIM inserted or invalid operator (MCC/MNC)");
+                        return;
+                    }
+
+                    final String mcc = simOperator.substring(0, 3);
+                    final String mnc = simOperator.substring(3);
+
+                    // Standard GSMA RCC.14 FQDN endpoint: config.rcs.mnc<MNC>.mcc<MCC>.pub.3gppnetwork.org
+                    acsUrl = String.format("https://config.rcs.mnc%03d.mcc%03d.pub.3gppnetwork.org/rcs/config/v1",
+                            Integer.parseInt(mnc), Integer.parseInt(mcc));
                 }
 
-                final String mcc = simOperator.substring(0, 3);
-                final String mnc = simOperator.substring(3);
-
-                // Standard GSMA RCC.14 FQDN endpoint: config.rcs.mnc<MNC>.mcc<MCC>.pub.3gppnetwork.org
-                String acsUrl = String.format("https://config.rcs.mnc%03d.mcc%03d.pub.3gppnetwork.org/rcs/config/v1",
-                        Integer.parseInt(mnc), Integer.parseInt(mcc));
-
                 if (otpToken != null && !otpToken.isEmpty()) {
-                    acsUrl += "?OTP=" + otpToken;
+                    acsUrl += (acsUrl.contains("?") ? "&" : "?") + "OTP=" + otpToken;
                 }
 
                 LogUtil.i(TAG, "Connecting to ACS endpoint: " + acsUrl);
                 final URL url = new URL(acsUrl);
-                final HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
+
+                // Attempt HTTP connection over default network first
+                HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
                 urlConnection.setRequestMethod("GET");
                 urlConnection.setRequestProperty("User-Agent", USER_AGENT);
                 urlConnection.setConnectTimeout(10000);
                 urlConnection.setReadTimeout(10000);
 
-                final int responseCode = urlConnection.getResponseCode();
+                int responseCode;
+                try {
+                    responseCode = urlConnection.getResponseCode();
+                } catch (Exception connEx) {
+                    LogUtil.w(TAG, "Connection failed over default network, trying cellular interface...", connEx);
+                    urlConnection.disconnect();
+
+                    // Try binding to cellular network for IMS / ACS routing
+                    urlConnection = connectOverCellular(context, url);
+                    if (urlConnection == null) {
+                        callback.onError("Network error: " + connEx.getMessage());
+                        return;
+                    }
+                    responseCode = urlConnection.getResponseCode();
+                }
+
                 if (responseCode == HttpURLConnection.HTTP_OK) {
                     final InputStream inputStream = urlConnection.getInputStream();
                     final AcsConfig config = parseAcsXml(inputStream);
@@ -87,17 +119,45 @@ public class AcsClient {
                         LogUtil.i(TAG, "ACS Provisioning successful for domain: " + config.getSipDomain());
                         callback.onSuccess(config);
                     } else {
-                        callback.onError("Failed to parse valid ACS XML payload");
+                        callback.onError("Failed to parse valid ACS XML configuration");
                     }
                 } else {
-                    callback.onError("ACS HTTP server returned code: " + responseCode);
+                    callback.onError("Carrier ACS returned HTTP error " + responseCode);
                 }
                 urlConnection.disconnect();
             } catch (Exception e) {
                 LogUtil.e(TAG, "ACS request failed", e);
-                callback.onError(e.getMessage());
+                callback.onError(e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
             }
         }).start();
+    }
+
+    private static HttpURLConnection connectOverCellular(Context context, URL url) {
+        try {
+            final ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return null;
+
+            final NetworkRequest request = new NetworkRequest.Builder()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .build();
+
+            final Network[] networks = cm.getAllNetworks();
+            for (Network network : networks) {
+                final NetworkCapabilities caps = cm.getNetworkCapabilities(network);
+                if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
+                    final HttpURLConnection conn = (HttpURLConnection) network.openConnection(url);
+                    conn.setRequestMethod("GET");
+                    conn.setRequestProperty("User-Agent", USER_AGENT);
+                    conn.setConnectTimeout(10000);
+                    conn.setReadTimeout(10000);
+                    return conn;
+                }
+            }
+        } catch (Exception e) {
+            LogUtil.e(TAG, "Cellular socket binding failed", e);
+        }
+        return null;
     }
 
     /**

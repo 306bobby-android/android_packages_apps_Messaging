@@ -17,10 +17,15 @@
 package com.android.messaging.rcs;
 
 import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
 
 import com.android.messaging.rcs.acs.AcsClient;
 import com.android.messaging.rcs.acs.AcsConfig;
 import com.android.messaging.util.LogUtil;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Main Singleton Manager for Open-Standard RCS Service operations.
@@ -32,11 +37,18 @@ public class RcsManager {
     public static final int STATE_CONNECTING = 1;
     public static final int STATE_REGISTERED = 2;
 
+    public interface RcsStateListener {
+        void onRcsStateChanged(int newState, String errorReason);
+    }
+
     private static RcsManager sInstance;
 
     private final Context mContext;
     private int mState = STATE_DISCONNECTED;
+    private String mLastErrorReason;
     private AcsConfig mAcsConfig;
+    private final List<RcsStateListener> mListeners = new ArrayList<>();
+    private final Handler mMainHandler = new Handler(Looper.getMainLooper());
 
     private RcsManager(Context context) {
         mContext = context.getApplicationContext();
@@ -53,6 +65,32 @@ public class RcsManager {
         return mState;
     }
 
+    public synchronized String getLastErrorReason() {
+        return mLastErrorReason;
+    }
+
+    public synchronized void addListener(RcsStateListener listener) {
+        if (!mListeners.contains(listener)) {
+            mListeners.add(listener);
+        }
+    }
+
+    public synchronized void removeListener(RcsStateListener listener) {
+        mListeners.remove(listener);
+    }
+
+    private synchronized void notifyStateChanged(final int newState, final String errorReason) {
+        mState = newState;
+        mLastErrorReason = errorReason;
+        mMainHandler.post(() -> {
+            synchronized (RcsManager.this) {
+                for (RcsStateListener listener : new ArrayList<>(mListeners)) {
+                    listener.onRcsStateChanged(newState, errorReason);
+                }
+            }
+        });
+    }
+
     public boolean isRcsAvailable() {
         return mState == STATE_REGISTERED && mAcsConfig != null && mAcsConfig.isRcsEnabled();
     }
@@ -62,18 +100,18 @@ public class RcsManager {
      */
     public void startProvisioning() {
         LogUtil.i(TAG, "Starting Carrier ACS Provisioning...");
-        mState = STATE_CONNECTING;
+        notifyStateChanged(STATE_CONNECTING, null);
         AcsClient.requestConfiguration(mContext, null, new AcsClient.AcsCallback() {
             @Override
             public void onSuccess(AcsConfig config) {
                 mAcsConfig = config;
-                mState = STATE_REGISTERED;
+                notifyStateChanged(STATE_REGISTERED, null);
                 LogUtil.i(TAG, "RCS Engine registered with P-CSCF: " + config.getPCscfAddress());
             }
 
             @Override
             public void onError(String errorReason) {
-                mState = STATE_DISCONNECTED;
+                notifyStateChanged(STATE_DISCONNECTED, errorReason);
                 LogUtil.e(TAG, "ACS Provisioning failed: " + errorReason);
             }
         });
@@ -84,17 +122,18 @@ public class RcsManager {
      */
     public void onAcsOtpReceived(String otp) {
         LogUtil.i(TAG, "Retrying ACS Provisioning with OTP verification code...");
+        notifyStateChanged(STATE_CONNECTING, null);
         AcsClient.requestConfiguration(mContext, otp, new AcsClient.AcsCallback() {
             @Override
             public void onSuccess(AcsConfig config) {
                 mAcsConfig = config;
-                mState = STATE_REGISTERED;
+                notifyStateChanged(STATE_REGISTERED, null);
                 LogUtil.i(TAG, "RCS Engine successfully registered via OTP with: " + config.getPCscfAddress());
             }
 
             @Override
             public void onError(String errorReason) {
-                mState = STATE_DISCONNECTED;
+                notifyStateChanged(STATE_DISCONNECTED, errorReason);
                 LogUtil.e(TAG, "ACS OTP Provisioning failed: " + errorReason);
             }
         });

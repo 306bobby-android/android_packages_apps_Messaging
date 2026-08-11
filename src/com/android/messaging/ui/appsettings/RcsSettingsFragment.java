@@ -18,6 +18,7 @@ package com.android.messaging.ui.appsettings;
 
 import android.os.Bundle;
 
+import androidx.preference.EditTextPreference;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceFragmentCompat;
 
@@ -27,7 +28,7 @@ import com.android.messaging.rcs.RcsManager;
 /**
  * Fragment rendering RCS preference toggles and live status.
  */
-public class RcsSettingsFragment extends PreferenceFragmentCompat {
+public class RcsSettingsFragment extends PreferenceFragmentCompat implements RcsManager.RcsStateListener {
 
     @Override
     public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
@@ -44,12 +45,33 @@ public class RcsSettingsFragment extends PreferenceFragmentCompat {
                 return true;
             });
         }
+
+        final EditTextPreference customUrlPref = findPreference("pref_key_rcs_custom_acs_url");
+        if (customUrlPref != null) {
+            customUrlPref.setOnPreferenceChangeListener((preference, newValue) -> {
+                RcsManager.getInstance(requireContext()).startProvisioning();
+                return true;
+            });
+        }
+
         updateStatusSummary();
     }
 
     @Override
     public void onResume() {
         super.onResume();
+        RcsManager.getInstance(requireContext()).addListener(this);
+        updateStatusSummary();
+    }
+
+    @Override
+    public void onPause() {
+        super.onPause();
+        RcsManager.getInstance(requireContext()).removeListener(this);
+    }
+
+    @Override
+    public void onRcsStateChanged(int newState, String errorReason) {
         updateStatusSummary();
     }
 
@@ -65,7 +87,12 @@ public class RcsSettingsFragment extends PreferenceFragmentCompat {
                     statusPref.setSummary(R.string.rcs_status_connecting);
                     break;
                 default:
-                    statusPref.setSummary(R.string.rcs_status_disconnected);
+                    final String reason = rcsManager.getLastErrorReason();
+                    if (reason != null && !reason.isEmpty()) {
+                        statusPref.setSummary(getString(R.string.rcs_status_disconnected) + " (" + reason + ")");
+                    } else {
+                        statusPref.setSummary(R.string.rcs_status_disconnected);
+                    }
                     break;
             }
         }
