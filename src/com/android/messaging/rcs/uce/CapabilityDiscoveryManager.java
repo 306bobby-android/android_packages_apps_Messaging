@@ -546,6 +546,15 @@ public class CapabilityDiscoveryManager {
                                         if (resCap == CAPABILITY_UNKNOWN) {
                                             // Nothing conclusive — do not overwrite what we already know.
                                             LogUtil.i(TAG, "[UCE RESULT] " + contactDest + " -> UNKNOWN (cache left untouched)");
+                                        } else if (resCap == CAPABILITY_NOT_SUPPORTED
+                                                && queryViaOptions(context, contactDest)) {
+                                            // This carrier's presence server does not hold
+                                            // capabilities for RCS users hosted elsewhere, and
+                                            // answers for them with NOT_FOUND or an empty document.
+                                            // Ask the contact's device directly before concluding
+                                            // anything, and let that answer write the result.
+                                            LogUtil.i(TAG, "[UCE RESULT] " + contactDest
+                                                    + " -> presence says no; awaiting OPTIONS");
                                         } else {
                                             updateCapability(context, contactDest, resCap);
                                             LogUtil.i(TAG, "[UCE RESULT] " + contactDest + " -> " + capabilityToString(resCap));
@@ -624,6 +633,21 @@ public class CapabilityDiscoveryManager {
         final List<String> singleList = new ArrayList<>();
         singleList.add(destination);
         requestBatchCapabilityDiscovery(context, singleList);
+    }
+
+    /**
+     * Falls back to a direct SIP OPTIONS query when presence reports nothing useful.
+     *
+     * @return true if a query was dispatched and will report the result itself
+     */
+    private static boolean queryViaOptions(Context context, String destination) {
+        try {
+            return com.android.messaging.rcs.chat.RcsChatSessionManager.getInstance(context)
+                    .queryCapabilityViaOptions(destination);
+        } catch (Throwable t) {
+            LogUtil.w(TAG, "OPTIONS fallback unavailable: " + t);
+            return false;
+        }
     }
 
     /**
