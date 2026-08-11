@@ -169,7 +169,16 @@ public class RcsManager {
         try {
             final ImsManager imsManager = (ImsManager) mContext.getSystemService(Context.TELEPHONY_IMS_SERVICE);
             if (imsManager != null) {
-                final int subId = SubscriptionManager.getDefaultSmsSubscriptionId();
+                int subId = SubscriptionManager.getDefaultSmsSubscriptionId();
+                if (subId == SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
+                    subId = SubscriptionManager.getDefaultDataSubscriptionId();
+                }
+                if (subId == SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
+                    final SubscriptionManager subMgr = mContext.getSystemService(SubscriptionManager.class);
+                    if (subMgr != null && subMgr.getActiveSubscriptionInfoList() != null && !subMgr.getActiveSubscriptionInfoList().isEmpty()) {
+                        subId = subMgr.getActiveSubscriptionInfoList().get(0).getSubscriptionId();
+                    }
+                }
                 final ImsRcsManager rcsManager = imsManager.getImsRcsManager(subId);
                 if (rcsManager != null) {
                     LogUtil.i(TAG, "Platform ImsRcsManager detected for subId: " + subId);

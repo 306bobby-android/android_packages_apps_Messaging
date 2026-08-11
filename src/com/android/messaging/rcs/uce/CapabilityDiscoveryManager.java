@@ -159,17 +159,14 @@ public class CapabilityDiscoveryManager {
                                 LogUtil.i(TAG, "Platform UCE proxy callback invoked: " + methodName + " for " + normalized);
 
                                 if ("onCapabilitiesReceived".equals(methodName)) {
-                                    final Object capabilities = args[0];
-                                    int resultCap = CAPABILITY_RCS_SUPPORTED; // Default to supported on valid callback
-                                    if (capabilities != null) {
-                                        try {
-                                            final Method isCapableMethod = capabilities.getClass().getMethod("isCapable", int.class);
-                                            // FEATURE_TAG_CHAT_IM = 1
-                                            final Boolean isCapable = (Boolean) isCapableMethod.invoke(capabilities, 1);
-                                            if (isCapable != null && !isCapable) {
-                                                resultCap = CAPABILITY_NOT_SUPPORTED;
-                                            }
-                                        } catch (Exception ignored) {}
+                                    final Object arg = (args != null && args.length > 0) ? args[0] : null;
+                                    LogUtil.i(TAG, "Platform UCE capabilities payload for " + normalized + ": " + arg);
+                                    int resultCap = CAPABILITY_RCS_SUPPORTED;
+                                    if (arg instanceof java.util.List) {
+                                        final java.util.List<?> list = (java.util.List<?>) arg;
+                                        if (list.isEmpty()) {
+                                            resultCap = CAPABILITY_NOT_SUPPORTED;
+                                        }
                                     }
                                     updateCapability(context, normalized, resultCap);
                                     LogUtil.i(TAG, "Platform UCE capability resolved for " + normalized + " -> " + resultCap);
