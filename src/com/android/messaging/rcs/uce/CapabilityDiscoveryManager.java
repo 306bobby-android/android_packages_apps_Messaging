@@ -29,7 +29,6 @@ import com.android.messaging.datamodel.DatabaseWrapper;
 import com.android.messaging.datamodel.DataModel;
 import com.android.messaging.datamodel.data.ParticipantData;
 import com.android.messaging.rcs.RcsManager;
-import com.android.messaging.rcs.sip.SipStackManager;
 import com.android.messaging.util.LogUtil;
 import com.android.messaging.util.PhoneUtils;
 
@@ -52,10 +51,44 @@ public class CapabilityDiscoveryManager {
     public static final int CAPABILITY_NOT_SUPPORTED = 2;
 
     private static final long CAPABILITY_CACHE_VALIDITY_MS = 24 * 60 * 60 * 1000L; // 24 hours
-    private static final long MIN_DISCOVERY_INTERVAL_MS = 5 * 1000L; // 5 seconds debounce (fast retry for unknown contacts)
+    // The platform serializes UCE SUBSCRIBE requests and lets each one run for up to 180s before
+    // timing out, so re-asking aggressively only builds an unservable backlog. Retry no faster
+    // than once a minute per contact.
+    private static final long MIN_DISCOVERY_INTERVAL_MS = 60 * 1000L;
+    // Hard ceiling on requests we allow to be outstanding in the platform UCE queue at once.
+    private static final int MAX_IN_FLIGHT_REQUESTS = 4;
+    // Safety valve: drop an in-flight entry if the platform never calls back, so a lost callback
+    // cannot permanently wedge discovery for that contact.
+    private static final long IN_FLIGHT_TIMEOUT_MS = 200 * 1000L;
+
+    // Mirrors android.telephony.ims.RcsContactUceCapability, which is @SystemApi and therefore
+    // not linkable from this app's public-SDK build (see Android.bp sdk_version: "current").
+    private static final int REQUEST_RESULT_UNKNOWN = 0;
+    private static final int REQUEST_RESULT_NOT_ONLINE = 1;
+    private static final int REQUEST_RESULT_NOT_FOUND = 2;
+    private static final int REQUEST_RESULT_FOUND = 3;
+
+    private static final int CAPABILITY_MECHANISM_PRESENCE = 1;
+    private static final int CAPABILITY_MECHANISM_OPTIONS = 2;
+
+    private static final String TUPLE_BASIC_STATUS_OPEN = "open";
+
+    /** Presence service-ids that mean "this contact can receive an RCS chat message". */
+    private static final java.util.Set<String> MESSAGING_SERVICE_IDS =
+            new java.util.HashSet<>(java.util.Arrays.asList(
+                    "org.openmobilealliance:ChatSession",    // SERVICE_ID_CHAT_V2
+                    "org.openmobilealliance:IM-session",     // SERVICE_ID_CHAT_V1
+                    "org.openmobilealliance:StandaloneMsg"));// SERVICE_ID_SLM
+
+    /** OPTIONS-mechanism feature tags that indicate messaging support. */
+    private static final String[] MESSAGING_FEATURE_TAG_HINTS = new String[] {
+            "oma.cpm.msg", "oma.cpm.session", "oma.cpm.largemsg", "oma.cpm.deferred",
+            "gsma.rcs.cpm.pager-large", "3gpp-application.ims.iari.rcse.im",
+    };
 
     private static final ArrayMap<String, Integer> sCapabilityCache = new ArrayMap<>();
     private static final ArrayMap<String, Long> sLastDiscoveryMap = new ArrayMap<>();
+    private static final ArrayMap<String, Long> sInFlightRequests = new ArrayMap<>();
     private static final Executor sAsyncExecutor = Executors.newSingleThreadExecutor();
 
     private static String capabilityToString(int capability) {
@@ -147,6 +180,129 @@ public class CapabilityDiscoveryManager {
         LogUtil.i(TAG, "[RECIPIENT SELECTED]   -> Selection Result: isRcs=" + isRcs + " for " + normalized);
         LogUtil.i(TAG, "==========================================================================");
         return isRcs;
+    }
+
+    /**
+     * Pulls the contact Uri out of an {@code RcsContactUceCapability} via its documented
+     * {@code getContactUri()} accessor.
+     */
+    private static String extractContactUri(Object capObj) {
+        try {
+            final Object uri = capObj.getClass().getMethod("getContactUri").invoke(capObj);
+            if (uri instanceof Uri) {
+                return ((Uri) uri).getSchemeSpecificPart();
+            }
+        } catch (Exception e) {
+            LogUtil.w(TAG, "extractContactUri: could not read getContactUri() — " + e);
+        }
+        return null;
+    }
+
+    /**
+     * Maps an {@code RcsContactUceCapability} onto our tri-state capability.
+     *
+     * <p>A definitive "yes" requires BOTH a {@code REQUEST_RESULT_FOUND} result AND an actual
+     * advertised messaging service. A contact that is merely present in the network (or whose
+     * result is unknown) is not treated as RCS-capable, so we never route a message into a
+     * transport the recipient cannot receive on.
+     */
+    private static int evaluateCapability(Object capObj) {
+        int requestResult = REQUEST_RESULT_UNKNOWN;
+        try {
+            final Object res = capObj.getClass().getMethod("getRequestResult").invoke(capObj);
+            if (res instanceof Integer) {
+                requestResult = (Integer) res;
+            }
+        } catch (Exception e) {
+            LogUtil.w(TAG, "evaluateCapability: could not read getRequestResult() — " + e);
+            return CAPABILITY_UNKNOWN;
+        }
+
+        switch (requestResult) {
+            case REQUEST_RESULT_NOT_FOUND:
+            case REQUEST_RESULT_NOT_ONLINE:
+                LogUtil.i(TAG, "evaluateCapability: requestResult=" + requestResult
+                        + " -> contact is not reachable over RCS");
+                return CAPABILITY_NOT_SUPPORTED;
+            case REQUEST_RESULT_UNKNOWN:
+                // No answer either way. Leave it UNKNOWN so we retry later rather than
+                // poisoning the cache with a guess.
+                LogUtil.i(TAG, "evaluateCapability: requestResult=UNKNOWN -> leaving undetermined");
+                return CAPABILITY_UNKNOWN;
+            case REQUEST_RESULT_FOUND:
+                break;
+            default:
+                LogUtil.w(TAG, "evaluateCapability: unrecognized requestResult=" + requestResult);
+                return CAPABILITY_UNKNOWN;
+        }
+
+        final boolean canMessage = hasMessagingCapability(capObj);
+        LogUtil.i(TAG, "evaluateCapability: requestResult=FOUND, messagingAdvertised=" + canMessage);
+        return canMessage ? CAPABILITY_RCS_SUPPORTED : CAPABILITY_NOT_SUPPORTED;
+    }
+
+    /**
+     * Returns true when the capability object advertises a usable RCS messaging service, via
+     * either the presence (tuple) or OPTIONS (feature tag) mechanism.
+     */
+    private static boolean hasMessagingCapability(Object capObj) {
+        int mechanism = CAPABILITY_MECHANISM_PRESENCE;
+        try {
+            final Object mech = capObj.getClass().getMethod("getCapabilityMechanism").invoke(capObj);
+            if (mech instanceof Integer) {
+                mechanism = (Integer) mech;
+            }
+        } catch (Exception ignored) {}
+
+        if (mechanism == CAPABILITY_MECHANISM_OPTIONS) {
+            return hasMessagingFeatureTag(capObj);
+        }
+        return hasOpenMessagingTuple(capObj);
+    }
+
+    private static boolean hasOpenMessagingTuple(Object capObj) {
+        try {
+            final Object tuples = capObj.getClass().getMethod("getCapabilityTuples").invoke(capObj);
+            if (!(tuples instanceof List)) return false;
+            for (Object tuple : (List<?>) tuples) {
+                if (tuple == null) continue;
+                final Object serviceId = tuple.getClass().getMethod("getServiceId").invoke(tuple);
+                if (!(serviceId instanceof String)
+                        || !MESSAGING_SERVICE_IDS.contains((String) serviceId)) {
+                    continue;
+                }
+                // A tuple whose basic status is "closed" advertises the service as unavailable.
+                final Object status = tuple.getClass().getMethod("getStatus").invoke(tuple);
+                final boolean open = !(status instanceof String)
+                        || TUPLE_BASIC_STATUS_OPEN.equalsIgnoreCase((String) status);
+                LogUtil.i(TAG, "hasOpenMessagingTuple: serviceId=" + serviceId
+                        + " status=" + status + " open=" + open);
+                if (open) return true;
+            }
+        } catch (Exception e) {
+            LogUtil.w(TAG, "hasOpenMessagingTuple: failed to inspect presence tuples — " + e);
+        }
+        return false;
+    }
+
+    private static boolean hasMessagingFeatureTag(Object capObj) {
+        try {
+            final Object tags = capObj.getClass().getMethod("getFeatureTags").invoke(capObj);
+            if (!(tags instanceof Collection)) return false;
+            for (Object tag : (Collection<?>) tags) {
+                if (!(tag instanceof String)) continue;
+                final String lower = ((String) tag).toLowerCase();
+                for (String hint : MESSAGING_FEATURE_TAG_HINTS) {
+                    if (lower.contains(hint)) {
+                        LogUtil.i(TAG, "hasMessagingFeatureTag: matched '" + hint + "' in " + tag);
+                        return true;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            LogUtil.w(TAG, "hasMessagingFeatureTag: failed to inspect feature tags — " + e);
+        }
+        return false;
     }
 
     private static String getCallerSummary() {
@@ -245,19 +401,64 @@ public class CapabilityDiscoveryManager {
         synchronized (sCapabilityCache) {
             sCapabilityCache.remove(normalized);
         }
+        synchronized (sInFlightRequests) {
+            sInFlightRequests.remove(normalizeKey(normalized));
+        }
         requestPlatformCapabilityDiscovery(context, normalized);
+    }
 
-        // Also send SIP OPTIONS query directly via SipStackManager as fallback
-        final SipStackManager sipManager = RcsManager.getInstance(context).getSipStackManager();
-        if (sipManager != null) {
-            sipManager.sendOptions(normalized);
+    /**
+     * Reserves a discovery slot for {@code normalized}, respecting the concurrency ceiling.
+     * The platform runs UCE SUBSCRIBEs one at a time with a 180s timeout each, so letting
+     * requests pile up produces a backlog that never drains.
+     *
+     * @return true if the caller may issue the request
+     */
+    private static boolean tryAcquireInFlight(String normalized) {
+        final long now = System.currentTimeMillis();
+        synchronized (sInFlightRequests) {
+            // Reap entries whose callback never arrived.
+            for (int i = sInFlightRequests.size() - 1; i >= 0; i--) {
+                if (now - sInFlightRequests.valueAt(i) > IN_FLIGHT_TIMEOUT_MS) {
+                    LogUtil.i(TAG, "tryAcquireInFlight: reaping stale request for " + sInFlightRequests.keyAt(i));
+                    sInFlightRequests.removeAt(i);
+                }
+            }
+            if (sInFlightRequests.containsKey(normalized)) {
+                LogUtil.i(TAG, "tryAcquireInFlight: " + normalized + " already in flight; skipping");
+                return false;
+            }
+            if (sInFlightRequests.size() >= MAX_IN_FLIGHT_REQUESTS) {
+                LogUtil.i(TAG, "tryAcquireInFlight: at capacity (" + sInFlightRequests.size()
+                        + "/" + MAX_IN_FLIGHT_REQUESTS + "); deferring " + normalized);
+                return false;
+            }
+            sInFlightRequests.put(normalized, now);
+            return true;
         }
     }
+
+    private static void clearInFlight(List<Uri> uris) {
+        synchronized (sInFlightRequests) {
+            for (Uri uri : uris) {
+                sInFlightRequests.remove(normalizeKey(uri.getSchemeSpecificPart()));
+            }
+        }
+    }
+
+    private static String normalizeKey(String destination) {
+        if (TextUtils.isEmpty(destination)) return "";
+        final String digits = destination.replaceAll("[^0-9]", "");
+        return digits.length() >= 10 ? digits.substring(digits.length() - 10) : digits;
+    }
+
     public static void requestBatchCapabilityDiscovery(Context context, List<String> destinations) {
         if (destinations == null || destinations.isEmpty()) return;
         sAsyncExecutor.execute(() -> {
             LogUtil.i(TAG, "===== RCS DISCOVERY START =====");
             LogUtil.i(TAG, "Discovery request for " + destinations.size() + " destinations: " + destinations);
+            // Declared outside the try so the failure paths below can release in-flight slots.
+            final List<Uri> uris = new ArrayList<>();
             try {
                 final Object uceAdapter = RcsManager.getInstance(context).getPlatformUceAdapter();
                 if (uceAdapter == null) {
@@ -266,19 +467,17 @@ public class CapabilityDiscoveryManager {
                     return;
                 }
 
-                final List<Uri> uris = new ArrayList<>();
                 for (String dest : destinations) {
                     final String norm = normalizeDestination(context, dest);
-                    if (!TextUtils.isEmpty(norm)) {
-                        final Uri contactUri = Uri.parse("tel:" + norm);
-                        if (!uris.contains(contactUri)) {
-                            uris.add(contactUri);
-                        }
-                    }
+                    if (TextUtils.isEmpty(norm)) continue;
+                    final Uri contactUri = Uri.parse("tel:" + norm);
+                    if (uris.contains(contactUri)) continue;
+                    if (!tryAcquireInFlight(normalizeKey(norm))) continue;
+                    uris.add(contactUri);
                 }
                 LogUtil.i(TAG, "Built " + uris.size() + " tel: URIs for discovery: " + uris);
                 if (uris.isEmpty()) {
-                    LogUtil.i(TAG, "===== RCS DISCOVERY END (no URIs) =====");
+                    LogUtil.i(TAG, "===== RCS DISCOVERY END (nothing to query) =====");
                     return;
                 }
 
@@ -297,80 +496,43 @@ public class CapabilityDiscoveryManager {
 
                             if ("onCapabilitiesReceived".equals(methodName)) {
                                 final Object arg = (args != null && args.length > 0) ? args[0] : null;
-                                LogUtil.i(TAG, "[EXACT UCE RESPONSE] Raw payload argument: " + arg);
                                 if (arg instanceof List) {
                                     final List<?> capabilitiesList = (List<?>) arg;
-                                    LogUtil.i(TAG, "[EXACT UCE RESPONSE] Capabilities item count: " + capabilitiesList.size());
+                                    LogUtil.i(TAG, "[UCE RESPONSE] Capabilities item count: " + capabilitiesList.size());
                                     for (int idx = 0; idx < capabilitiesList.size(); idx++) {
                                         final Object capObj = capabilitiesList.get(idx);
-                                        LogUtil.i(TAG, "[EXACT UCE RESPONSE ITEM #" + idx + "] Object: " + capObj);
                                         if (capObj == null) continue;
-                                        try {
-                                            String contactDest = null;
-                                            for (Method m : capObj.getClass().getMethods()) {
-                                                if (m.getParameterTypes().length == 0 && !m.getName().equals("hashCode") && !m.getName().equals("toString")) {
-                                                    try {
-                                                        Object val = m.invoke(capObj);
-                                                        LogUtil.i(TAG, "   capObj." + m.getName() + "() = " + val);
-                                                        if (val instanceof Uri && contactDest == null) {
-                                                            contactDest = ((Uri) val).getSchemeSpecificPart();
-                                                        }
-                                                    } catch (Exception ignored) {}
-                                                }
-                                            }
+                                        LogUtil.i(TAG, "[UCE RESPONSE ITEM #" + idx + "] " + capObj);
 
-                                            boolean isCapable = true;
-                                            try {
-                                                final Method isCapMethod = capObj.getClass().getMethod("isCapable", int.class);
-                                                final Boolean isCapRes = (Boolean) isCapMethod.invoke(capObj, 1);
-                                                LogUtil.i(TAG, "   capObj.isCapable(FEATURE_CHAT_1) = " + isCapRes);
-                                                if (isCapRes != null) isCapable = isCapRes;
-                                            } catch (Exception ignored) {}
+                                        final String contactDest = extractContactUri(capObj);
+                                        if (contactDest == null) {
+                                            LogUtil.w(TAG, "[UCE RESPONSE ITEM #" + idx + "] no contact Uri; skipping");
+                                            continue;
+                                        }
+                                        resolvedDestinations.add(contactDest);
 
-                                            if (contactDest != null) {
-                                                resolvedDestinations.add(contactDest);
-                                                final int resCap = isCapable ? CAPABILITY_RCS_SUPPORTED : CAPABILITY_NOT_SUPPORTED;
-                                                updateCapability(context, contactDest, resCap);
-                                                LogUtil.i(TAG, "[EXACT UCE RESULT] Contact " + contactDest + " capability -> " + capabilityToString(resCap) + " (isCapable=" + isCapable + ")");
-                                            } else {
-                                                LogUtil.w(TAG, "[EXACT UCE RESULT] Could not extract contact Uri from capObj!");
-                                            }
-                                        } catch (Exception e) {
-                                            LogUtil.w(TAG, "[EXACT UCE ERROR] Error parsing capability item #" + idx + ": " + e.getMessage());
+                                        final int resCap = evaluateCapability(capObj);
+                                        if (resCap == CAPABILITY_UNKNOWN) {
+                                            // Nothing conclusive — do not overwrite what we already know.
+                                            LogUtil.i(TAG, "[UCE RESULT] " + contactDest + " -> UNKNOWN (cache left untouched)");
+                                        } else {
+                                            updateCapability(context, contactDest, resCap);
+                                            LogUtil.i(TAG, "[UCE RESULT] " + contactDest + " -> " + capabilityToString(resCap));
                                         }
                                     }
                                 }
                             } else if ("onComplete".equals(methodName)) {
-                                LogUtil.i(TAG, "[EXACT UCE COMPLETE] onComplete() fired! Resolved " + resolvedDestinations.size() + " of " + uris.size() + " requested URIs");
-                                final SipStackManager sipManager = RcsManager.getInstance(context).getSipStackManager();
-                                for (Uri requestedUri : uris) {
-                                    final String reqDest = requestedUri.getSchemeSpecificPart();
-                                    if (!resolvedDestinations.contains(reqDest)) {
-                                        LogUtil.i(TAG, "[EXACT UCE COMPLETE] Contact " + reqDest + " NOT resolved by platform UCE — triggering direct SIP OPTIONS query fallback!");
-                                        if (sipManager != null) {
-                                            sipManager.sendOptions(reqDest);
-                                        }
-                                        updateCapability(context, reqDest, CAPABILITY_NOT_SUPPORTED);
-                                    } else {
-                                        LogUtil.i(TAG, "[EXACT UCE COMPLETE] Contact " + reqDest + " was successfully resolved by platform UCE!");
-                                    }
-                                }
+                                LogUtil.i(TAG, "[UCE COMPLETE] Resolved " + resolvedDestinations.size()
+                                        + " of " + uris.size() + " requested URIs");
+                                // Contacts the platform never reported on stay UNKNOWN so the next
+                                // discovery attempt can retry them. Marking them NOT_SUPPORTED here
+                                // would cache a non-answer as a definitive "no" for 24 hours.
+                                clearInFlight(uris);
                             } else if ("onError".equals(methodName)) {
                                 final Object errArg = (args != null && args.length > 0) ? args[0] : "unknown";
-                                LogUtil.w(TAG, "[EXACT UCE ERROR] onError() callback fired with error code/arg: " + errArg);
-                                LogUtil.i(TAG, "[EXACT UCE ERROR] Modem returned error code " + errArg + " (COMMAND_CODE_NOT_SUPPORTED=10). Preserving contact capability and attempting SIP OPTIONS fallback.");
-                                final SipStackManager sipManager = RcsManager.getInstance(context).getSipStackManager();
-                                for (Uri requestedUri : uris) {
-                                    final String reqDest = requestedUri.getSchemeSpecificPart();
-                                    if (!resolvedDestinations.contains(reqDest)) {
-                                        LogUtil.i(TAG, "[EXACT UCE ERROR] Triggering SIP OPTIONS fallback for " + reqDest + " due to UCE onError(" + errArg + ")");
-                                        if (sipManager != null) {
-                                            sipManager.sendOptions(reqDest);
-                                        }
-                                    }
-                                }
+                                LogUtil.w(TAG, "[UCE ERROR] onError(" + errArg + ") — leaving unresolved contacts UNKNOWN for retry");
+                                clearInFlight(uris);
                             }
-                            LogUtil.i(TAG, "==========================================================================");
                             return null;
                         }
                 );
@@ -404,18 +566,21 @@ public class CapabilityDiscoveryManager {
                     if (useRequestAvailability) {
                         for (Uri u : uris) {
                             reqMethod.invoke(uceAdapter, u, context.getMainExecutor(), callbackProxy);
-                            LogUtil.i(TAG, "Successfully executed UCE requestAvailability for URI: " + u);
+                            LogUtil.i(TAG, "Dispatched UCE requestAvailability for URI: " + u);
                         }
                     } else {
                         reqMethod.invoke(uceAdapter, uris, context.getMainExecutor(), callbackProxy);
-                        LogUtil.i(TAG, "Successfully executed batch UCE requestCapabilities for " + uris.size() + " URIs");
+                        LogUtil.i(TAG, "Dispatched batch UCE requestCapabilities for " + uris.size() + " URIs");
                     }
                 } else {
                     LogUtil.w(TAG, "No compatible UCE method found on RcsUceAdapter");
+                    clearInFlight(uris);
                 }
                 LogUtil.i(TAG, "===== RCS DISCOVERY END =====");
             } catch (Exception e) {
                 LogUtil.w(TAG, "Batch UCE discovery failed: " + e.getMessage());
+                // Nothing will call back for these, so release their slots immediately.
+                clearInFlight(uris);
                 LogUtil.i(TAG, "===== RCS DISCOVERY END (error) =====");
             }
         });
