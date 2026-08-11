@@ -79,13 +79,20 @@ public final class SipConfigSnapshot {
         }
     }
 
-    /** The URI this device sends from, preferring the GRUU when the network issued one. */
+    /**
+     * The URI this device is reachable at, preferring the GRUU when the network issued one.
+     *
+     * <p>A Contact is {@code user@host:port} where the host is this UA's own address, so only the
+     * user part of the public identity is used. Appending the local address to the whole identity
+     * produces {@code sip:user@domain@host}, which is not a valid SIP URI and is discarded by the
+     * P-CSCF without any response at all.
+     */
     public String localContactUri() {
         if (publicGruuUri != null) {
             return publicGruuUri.toString();
         }
         final StringBuilder sb = new StringBuilder("sip:");
-        sb.append(stripScheme(publicUserIdentifier));
+        sb.append(userPart(publicUserIdentifier));
         if (localAddress != null && localAddress.getAddress() != null) {
             sb.append('@').append(formatHost(localAddress.getAddress().getHostAddress()));
             if (localAddress.getPort() > 0) {
@@ -94,10 +101,30 @@ public final class SipConfigSnapshot {
         } else if (homeDomain != null) {
             sb.append('@').append(homeDomain);
         }
-        if (contactUserParameter != null && !contactUserParameter.isEmpty()) {
-            sb.append(";user=").append(contactUserParameter);
-        }
+        sb.append(";transport=").append(transportName().toLowerCase(java.util.Locale.US));
         return sb.toString();
+    }
+
+    /**
+     * Contact header parameters that belong outside the URI's angle brackets.
+     *
+     * <p>The ImsService reports a UUID here. That is the instance identifier used for GRUU and
+     * outbound registration, not a {@code user=} URI parameter, so it is emitted as
+     * {@code +sip.instance}.
+     */
+    public String contactHeaderParams() {
+        if (contactUserParameter == null || contactUserParameter.isEmpty()) return "";
+        final String value = contactUserParameter.startsWith("urn:")
+                ? contactUserParameter : "urn:uuid:" + contactUserParameter;
+        return ";+sip.instance=\"<" + value + ">\"";
+    }
+
+    /** The portion of a SIP identity before the {@code @}. */
+    private static String userPart(String uri) {
+        final String bare = stripScheme(uri);
+        if (bare == null) return "";
+        final int at = bare.indexOf('@');
+        return at >= 0 ? bare.substring(0, at) : bare;
     }
 
     /** The address-of-record used in From/To headers. */

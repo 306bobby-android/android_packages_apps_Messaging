@@ -274,8 +274,9 @@ public class RcsChatSessionManager
         h.append("To: <").append(session.getRemoteUri()).append(">\r\n");
         h.append("Call-ID: ").append(session.getCallId()).append("\r\n");
         h.append("CSeq: ").append(session.nextCSeq()).append(" INVITE\r\n");
-        h.append("Contact: <").append(config.localContactUri()).append(">;")
-                .append(RcsChatSession.ICSI_CHAT_SESSION).append("\r\n");
+        h.append("Contact: <").append(config.localContactUri()).append(">")
+                .append(config.contactHeaderParams())
+                .append(';').append(RcsChatSession.ICSI_CHAT_SESSION).append("\r\n");
         h.append("Accept-Contact: *;").append(RcsChatSession.ICSI_CHAT_SESSION)
                 .append(";require;explicit\r\n");
         h.append("P-Preferred-Identity: <").append(config.localAor()).append(">\r\n");
@@ -306,8 +307,9 @@ public class RcsChatSessionManager
         h.append("To: ").append(withTag(request.getFirst("to"), session.getLocalTag())).append("\r\n");
         h.append("Call-ID: ").append(session.getCallId()).append("\r\n");
         h.append("CSeq: ").append(request.getFirst("cseq")).append("\r\n");
-        h.append("Contact: <").append(config.localContactUri()).append(">;")
-                .append(RcsChatSession.ICSI_CHAT_SESSION).append("\r\n");
+        h.append("Contact: <").append(config.localContactUri()).append(">")
+                .append(config.contactHeaderParams())
+                .append(';').append(RcsChatSession.ICSI_CHAT_SESSION).append("\r\n");
         h.append("Allow: INVITE, ACK, CANCEL, BYE, OPTIONS, UPDATE, MESSAGE, NOTIFY\r\n");
         appendUserAgent(h, config);
         h.append("Content-Type: application/sdp\r\n");
