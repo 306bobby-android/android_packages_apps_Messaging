@@ -98,7 +98,12 @@ public class CapabilityDiscoveryManager {
             final Object uceAdapter = RcsManager.getInstance(context).getPlatformUceAdapter();
             if (uceAdapter != null) {
                 final Uri contactUri = Uri.parse("tel:" + destination);
-                LogUtil.i(TAG, "Requesting platform UCE capability discovery for " + destination + " via " + contactUri);
+                for (Method m : uceAdapter.getClass().getMethods()) {
+                    if (m.getName().equals("requestAvailability") || m.getName().equals("requestCapabilities")) {
+                        LogUtil.i(TAG, "Discovered platform UCE method: " + m.getName() + " for " + destination);
+                        break;
+                    }
+                }
             }
         } catch (Exception e) {
             LogUtil.w(TAG, "Platform UCE request failed: " + e.getMessage());
