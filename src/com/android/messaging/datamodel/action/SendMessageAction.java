@@ -214,7 +214,7 @@ public class SendMessageAction extends Action implements Parcelable {
             final Context context = Factory.get().getApplicationContext();
             final String recipient = actionParameters.getString(KEY_RECIPIENT);
             final int rcsStatus = RcsSendMessageDelegate.sendRcsMessage(context, message, recipient);
-            status = (rcsStatus == MessageData.BUGLE_STATUS_OUTGOING_COMPLETE) ? MmsUtils.MMS_REQUEST_SUCCEEDED : MmsUtils.MMS_REQUEST_MANUAL_RETRY;
+            status = (rcsStatus == MessageData.BUGLE_STATUS_OUTGOING_COMPLETE || rcsStatus == MessageData.BUGLE_STATUS_OUTGOING_DELIVERED) ? MmsUtils.MMS_REQUEST_SUCCEEDED : MmsUtils.MMS_REQUEST_MANUAL_RETRY;
         } else if (isSms) {
             Assert.notNull(messageUri);
             final String recipient = actionParameters.getString(KEY_RECIPIENT);

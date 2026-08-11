@@ -91,15 +91,20 @@ public class CapabilityDiscoveryManager {
      * Checks cached capability status for destination phone number using fast in-memory lookup.
      */
     public static int getCachedCapability(Context context, String destination) {
-        final String normalized = normalizeDestination(context, destination);
-        if (TextUtils.isEmpty(normalized)) return CAPABILITY_UNKNOWN;
+        if (TextUtils.isEmpty(destination)) return CAPABILITY_UNKNOWN;
+        final String digits = destination.replaceAll("[^0-9]", "");
+        final String suffix = digits.length() >= 10 ? digits.substring(digits.length() - 10) : digits;
 
         synchronized (sCapabilityCache) {
-            final Integer cached = sCapabilityCache.get(normalized);
-            if (cached != null) {
-                return cached;
+            for (Map.Entry<String, Integer> entry : sCapabilityCache.entrySet()) {
+                final String cacheKeyDigits = entry.getKey().replaceAll("[^0-9]", "");
+                if (cacheKeyDigits.endsWith(suffix)) {
+                    return entry.getValue();
+                }
             }
         }
+
+        final String normalized = normalizeDestination(context, destination);
 
         // Query database on background thread if uncached
         sAsyncExecutor.execute(() -> {
