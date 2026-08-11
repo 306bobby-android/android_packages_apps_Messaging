@@ -766,4 +766,12 @@
 
     <!-- When making a call to emergency numbers, show this toast -->
     <string name="disallow_emergency_call">Can\'t make a voice call to emergency services here.</string>
+
+    <!-- RCS Read Receipts -->
+    <string name="rcs_settings_read_receipts_title">Send read receipts</string>
+    <string name="rcs_settings_read_receipts_summary">Allow others to see when you have read their messages</string>
+    <string name="rcs_per_contact_read_receipts_title">Send read receipts</string>
+    <string name="rcs_per_contact_read_receipts_default">Default (Use global setting)</string>
+    <string name="rcs_per_contact_read_receipts_always">Always send read receipts</string>
+    <string name="rcs_per_contact_read_receipts_never">Never send read receipts</string>
 </resources>

@@ -424,6 +424,12 @@ public class ConversationMessageView extends FrameLayout implements View.OnClick
 
         final boolean deliveredBadgeVisible =
                 mData.getStatus() == MessageData.BUGLE_STATUS_OUTGOING_DELIVERED;
+        if (mDeliveredBadge instanceof android.widget.ImageView) {
+            final android.widget.ImageView badgeImage = (android.widget.ImageView) mDeliveredBadge;
+            if (deliveredBadgeVisible) {
+                badgeImage.setImageResource(R.drawable.ic_rcs_delivered);
+            }
+        }
         mDeliveredBadge.setVisibility(deliveredBadgeVisible ? View.VISIBLE : View.GONE);
 
         // Update the sim indicator.

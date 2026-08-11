@@ -158,6 +158,26 @@ public class PeopleAndOptionsFragment extends Fragment
                     })
                     .create()
                     .show();
+        } else if (item.getItemId() == PeopleOptionsItemData.SETTING_READ_RECEIPTS) {
+            final ParticipantData other = item.getOtherParticipant();
+            if (other != null) {
+                final String dest = other.getNormalizedDestination();
+                final String[] options = new String[] {
+                    getString(R.string.rcs_per_contact_read_receipts_default),
+                    getString(R.string.rcs_per_contact_read_receipts_always),
+                    getString(R.string.rcs_per_contact_read_receipts_never)
+                };
+                final int currentSetting = com.android.messaging.rcs.imdn.ImdnManager.getPerContactReadReceiptSetting(dest);
+                new AlertDialog.Builder(getActivity(), R.style.AlertDialogTheme)
+                        .setTitle(R.string.rcs_per_contact_read_receipts_title)
+                        .setSingleChoiceItems(options, currentSetting, (dialog, which) -> {
+                            com.android.messaging.rcs.imdn.ImdnManager.setPerContactReadReceiptSetting(dest, which);
+                            dialog.dismiss();
+                        })
+                        .setNegativeButton(android.R.string.cancel, null)
+                        .create()
+                        .show();
+            }
         }
     }
 

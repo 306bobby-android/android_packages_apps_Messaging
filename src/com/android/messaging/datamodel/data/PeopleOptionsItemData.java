@@ -22,11 +22,10 @@ import android.database.Cursor;
 import com.android.messaging.R;
 import com.android.messaging.util.Assert;
 
-public class PeopleOptionsItemData {
-    // Identification for each setting that's surfaced to the UI layer.
     public static final int SETTING_NOTIFICATION = 0;
     public static final int SETTING_BLOCKED = 1;
-    public static final int SETTINGS_COUNT = 2;
+    public static final int SETTING_READ_RECEIPTS = 2;
+    public static final int SETTINGS_COUNT = 3;
 
     private String mTitle;
     private int mItemId;
@@ -58,6 +57,10 @@ public class PeopleOptionsItemData {
                 final int resourceId = otherParticipant.isBlocked() ?
                         R.string.unblock_contact_title : R.string.block_contact_title;
                 mTitle = mContext.getString(resourceId, otherParticipant.getDisplayDestination());
+                break;
+
+            case SETTING_READ_RECEIPTS:
+                mTitle = mContext.getString(R.string.rcs_per_contact_read_receipts_title);
                 break;
 
              default:

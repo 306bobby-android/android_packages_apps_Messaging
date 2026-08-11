@@ -28,6 +28,12 @@
         android:title="@string/rcs_settings_status_title"
         android:selectable="false" />
 
+    <SwitchPreferenceCompat
+        android:key="pref_key_rcs_send_read_receipts"
+        android:title="@string/rcs_settings_read_receipts_title"
+        android:summary="@string/rcs_settings_read_receipts_summary"
+        android:defaultValue="true" />
+
     <EditTextPreference
         android:key="pref_key_rcs_custom_acs_url"
         android:title="@string/rcs_settings_custom_acs_title"
