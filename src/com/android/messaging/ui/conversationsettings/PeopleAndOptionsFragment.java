@@ -178,6 +178,37 @@ public class PeopleAndOptionsFragment extends Fragment
                         .create()
                         .show();
             }
+        } else if (item.getItemId() == PeopleOptionsItemData.SETTING_RCS_CAPABILITY) {
+            final ParticipantData other = item.getOtherParticipant();
+            if (other != null) {
+                final String dest = other.getNormalizedDestination();
+                final int currentCap = com.android.messaging.rcs.uce.CapabilityDiscoveryManager.getCachedCapability(getContext(), dest);
+                final String currentStatusStr = (currentCap == com.android.messaging.rcs.uce.CapabilityDiscoveryManager.CAPABILITY_RCS_SUPPORTED) ? "RCS Supported (Active)" :
+                        (currentCap == com.android.messaging.rcs.uce.CapabilityDiscoveryManager.CAPABILITY_NOT_SUPPORTED) ? "SMS Only (Non-RCS)" : "Unknown / Uncached";
+                final String[] actions = new String[] {
+                    "Force Refresh Capability Discovery",
+                    "Force Enable RCS for this Contact",
+                    "Reset to Automatic Discovery"
+                };
+                new AlertDialog.Builder(getActivity(), R.style.AlertDialogTheme)
+                        .setTitle("RCS Capability (" + currentStatusStr + ")")
+                        .setItems(actions, (dialog, which) -> {
+                            if (which == 0) {
+                                com.android.messaging.rcs.uce.CapabilityDiscoveryManager.forceRefreshCapability(getContext(), dest);
+                                android.widget.Toast.makeText(getContext(), "Triggered force UCE capability refresh for " + dest, android.widget.Toast.LENGTH_SHORT).show();
+                            } else if (which == 1) {
+                                com.android.messaging.rcs.uce.CapabilityDiscoveryManager.updateCapability(getContext(), dest, com.android.messaging.rcs.uce.CapabilityDiscoveryManager.CAPABILITY_RCS_SUPPORTED);
+                                android.widget.Toast.makeText(getContext(), "Force enabled RCS for " + dest, android.widget.Toast.LENGTH_SHORT).show();
+                            } else if (which == 2) {
+                                com.android.messaging.rcs.uce.CapabilityDiscoveryManager.updateCapability(getContext(), dest, com.android.messaging.rcs.uce.CapabilityDiscoveryManager.CAPABILITY_UNKNOWN);
+                                com.android.messaging.rcs.uce.CapabilityDiscoveryManager.forceRefreshCapability(getContext(), dest);
+                                android.widget.Toast.makeText(getContext(), "Reset capability discovery for " + dest, android.widget.Toast.LENGTH_SHORT).show();
+                            }
+                        })
+                        .setNegativeButton(android.R.string.cancel, null)
+                        .create()
+                        .show();
+            }
         }
     }
 

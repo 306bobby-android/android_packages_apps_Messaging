@@ -134,8 +134,19 @@ public class CapabilityDiscoveryManager {
     }
 
     /**
-     * Triggers batch RCS capability discovery for multiple contact URIs in a single platform UCE request.
+     * Forcefully triggers UCE capability discovery bypassing debouncing timers.
      */
+    public static void forceRefreshCapability(Context context, String destination) {
+        final String normalized = normalizeDestination(context, destination);
+        if (TextUtils.isEmpty(normalized)) return;
+        synchronized (sLastDiscoveryMap) {
+            sLastDiscoveryMap.remove(normalized);
+        }
+        synchronized (sCapabilityCache) {
+            sCapabilityCache.remove(normalized);
+        }
+        requestPlatformCapabilityDiscovery(context, normalized);
+    }
     public static void requestBatchCapabilityDiscovery(Context context, List<String> destinations) {
         if (destinations == null || destinations.isEmpty()) return;
         sAsyncExecutor.execute(() -> {

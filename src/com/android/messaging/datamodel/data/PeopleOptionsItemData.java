@@ -27,7 +27,8 @@ public class PeopleOptionsItemData {
     public static final int SETTING_NOTIFICATION = 0;
     public static final int SETTING_BLOCKED = 1;
     public static final int SETTING_READ_RECEIPTS = 2;
-    public static final int SETTINGS_COUNT = 3;
+    public static final int SETTING_RCS_CAPABILITY = 3;
+    public static final int SETTINGS_COUNT = 4;
 
     private String mTitle;
     private int mItemId;
@@ -63,6 +64,10 @@ public class PeopleOptionsItemData {
 
             case SETTING_READ_RECEIPTS:
                 mTitle = mContext.getString(R.string.rcs_per_contact_read_receipts_title);
+                break;
+
+            case SETTING_RCS_CAPABILITY:
+                mTitle = "RCS Capability Settings";
                 break;
 
              default:
