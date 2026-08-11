@@ -52,7 +52,7 @@ public class CapabilityDiscoveryManager {
     public static final int CAPABILITY_NOT_SUPPORTED = 2;
 
     private static final long CAPABILITY_CACHE_VALIDITY_MS = 24 * 60 * 60 * 1000L; // 24 hours
-    private static final long MIN_DISCOVERY_INTERVAL_MS = 30 * 1000L; // 30 seconds debounce
+    private static final long MIN_DISCOVERY_INTERVAL_MS = 5 * 1000L; // 5 seconds debounce (fast retry for unknown contacts)
 
     private static final ArrayMap<String, Integer> sCapabilityCache = new ArrayMap<>();
     private static final ArrayMap<String, Long> sLastDiscoveryMap = new ArrayMap<>();
