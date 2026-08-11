@@ -129,9 +129,19 @@ public final class SipDelegateProbe {
         }
 
         if (!supported) {
-            LogUtil.w(TAG, "Single registration is NOT supported for this sub. "
-                    + "Check `cmd phone src get-carrier-enabled -s 0` and the ImsService's "
-                    + "CAPABILITY_SIP_DELEGATE_CREATION.");
+            // Verified on this device: the ImsService side is fine — com.shannon.rcsservice
+            // advertises CAPABILITY_SIP_DELEGATE_CREATION and the RCS FeatureContainer carries a
+            // live ISipTransport binder. What is missing is that TelephonyRcsService only attaches
+            // a SipTransportController when the carrier config key below is true, and it defaults
+            // to false. Without that controller isSipDelegateSupported() returns false.
+            LogUtil.w(TAG, "Single registration NOT supported for this sub.");
+            LogUtil.w(TAG, "  Gate is carrier config ims.ims_single_registration_required_bool "
+                    + "(CarrierConfigManager.Ims.KEY_IMS_SINGLE_REGISTRATION_REQUIRED_BOOL), "
+                    + "which defaults to false and is not overridden for this carrier.");
+            LogUtil.w(TAG, "  `cmd phone src set-carrier-enabled` does NOT affect this — it sets the "
+                    + "provisioning override, not the carrier config key TelephonyRcsService reads.");
+            LogUtil.w(TAG, "  Confirm with: dumpsys phone | grep -A5 RcsFeatureControllers "
+                    + "-> SipTransportController present?");
             LogUtil.i(TAG, "===== SIP DELEGATE PROBE END (unsupported) =====");
             return;
         }
