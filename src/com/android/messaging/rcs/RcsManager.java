@@ -22,6 +22,7 @@ import android.os.Looper;
 
 import com.android.messaging.rcs.acs.AcsClient;
 import com.android.messaging.rcs.acs.AcsConfig;
+import com.android.messaging.rcs.sip.SipStackManager;
 import com.android.messaging.util.LogUtil;
 
 import java.util.ArrayList;
@@ -47,6 +48,7 @@ public class RcsManager {
     private int mState = STATE_DISCONNECTED;
     private String mLastErrorReason;
     private AcsConfig mAcsConfig;
+    private SipStackManager mSipStackManager;
     private final List<RcsStateListener> mListeners = new ArrayList<>();
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
 
@@ -107,6 +109,7 @@ public class RcsManager {
                 mAcsConfig = config;
                 notifyStateChanged(STATE_REGISTERED, null);
                 LogUtil.i(TAG, "RCS Engine registered with P-CSCF: " + config.getPCscfAddress());
+                startSipRegistration(config);
             }
 
             @Override
@@ -129,6 +132,7 @@ public class RcsManager {
                 mAcsConfig = config;
                 notifyStateChanged(STATE_REGISTERED, null);
                 LogUtil.i(TAG, "RCS Engine successfully registered via OTP with: " + config.getPCscfAddress());
+                startSipRegistration(config);
             }
 
             @Override
@@ -139,7 +143,19 @@ public class RcsManager {
         });
     }
 
+    private synchronized void startSipRegistration(AcsConfig config) {
+        if (mSipStackManager != null) {
+            mSipStackManager.disconnect();
+        }
+        mSipStackManager = new SipStackManager(mContext, config);
+        mSipStackManager.connectAndRegister();
+    }
+
     public AcsConfig getAcsConfig() {
         return mAcsConfig;
+    }
+
+    public SipStackManager getSipStackManager() {
+        return mSipStackManager;
     }
 }
