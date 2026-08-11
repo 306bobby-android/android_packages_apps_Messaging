@@ -39,7 +39,7 @@ public class AcsConfig {
         config.setPCscfAddress("ss.epdg.epc.mnc260.mcc310.pub.3gppnetwork.org");
         config.setPCscfPort(5060);
         config.setSipDomain("msg.pc.t-mobile.com");
-        config.setIsRcsEnabled(true);
+        config.setRcsEnabled(true);
         return config;
     }
 
