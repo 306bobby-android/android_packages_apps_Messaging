@@ -50,7 +50,10 @@ public class CapabilityDiscoveryManager {
     public static final int CAPABILITY_RCS_SUPPORTED = 1;
     public static final int CAPABILITY_NOT_SUPPORTED = 2;
 
-    private static final long CAPABILITY_CACHE_VALIDITY_MS = 24 * 60 * 60 * 1000L; // 24 hours
+    // Kept deliberately short: a cached RCS_SUPPORTED never re-triggers discovery, so a wrong
+    // entry would otherwise stick for its full lifetime. 3 hours bounds the damage from a stale
+    // or bad result while still avoiding a re-query on every conversation open.
+    private static final long CAPABILITY_CACHE_VALIDITY_MS = 3 * 60 * 60 * 1000L; // 3 hours
     // The platform serializes UCE SUBSCRIBE requests and lets each one run for up to 180s before
     // timing out, so re-asking aggressively only builds an unservable backlog. Retry no faster
     // than once a minute per contact.
@@ -86,7 +89,22 @@ public class CapabilityDiscoveryManager {
             "gsma.rcs.cpm.pager-large", "3gpp-application.ims.iari.rcse.im",
     };
 
-    private static final ArrayMap<String, Integer> sCapabilityCache = new ArrayMap<>();
+    /** An in-memory capability result paired with the time it was recorded. */
+    private static final class CachedCapability {
+        final int capability;
+        final long timestamp;
+
+        CachedCapability(int capability, long timestamp) {
+            this.capability = capability;
+            this.timestamp = timestamp;
+        }
+
+        boolean isExpired(long now) {
+            return now - timestamp >= CAPABILITY_CACHE_VALIDITY_MS;
+        }
+    }
+
+    private static final ArrayMap<String, CachedCapability> sCapabilityCache = new ArrayMap<>();
     private static final ArrayMap<String, Long> sLastDiscoveryMap = new ArrayMap<>();
     private static final ArrayMap<String, Long> sInFlightRequests = new ArrayMap<>();
     private static final Executor sAsyncExecutor = Executors.newSingleThreadExecutor();
@@ -326,15 +344,25 @@ public class CapabilityDiscoveryManager {
         final String digits = destination.replaceAll("[^0-9]", "");
         final String suffix = digits.length() >= 10 ? digits.substring(digits.length() - 10) : digits;
 
+        final long now = System.currentTimeMillis();
         synchronized (sCapabilityCache) {
             LogUtil.d(TAG, "[DEEP LOG] getCachedCapability: Checking in-memory cache (size=" + sCapabilityCache.size() + ") for suffix '" + suffix + "'");
-            for (Map.Entry<String, Integer> entry : sCapabilityCache.entrySet()) {
+            for (Map.Entry<String, CachedCapability> entry : sCapabilityCache.entrySet()) {
                 final String cacheKeyDigits = entry.getKey().replaceAll("[^0-9]", "");
-                if (cacheKeyDigits.endsWith(suffix)) {
-                    final int cachedCap = entry.getValue();
-                    LogUtil.i(TAG, "[DEEP LOG] getCachedCapability: In-memory HIT! Key='" + entry.getKey() + "' suffix='" + suffix + "' -> " + capabilityToString(cachedCap));
-                    return cachedCap;
+                if (!cacheKeyDigits.endsWith(suffix)) continue;
+
+                final CachedCapability cached = entry.getValue();
+                if (cached.isExpired(now)) {
+                    // Fall through to the database, which applies the same validity window and
+                    // will either refresh this entry or leave the contact UNKNOWN for rediscovery.
+                    LogUtil.i(TAG, "[DEEP LOG] getCachedCapability: In-memory entry for '" + entry.getKey()
+                            + "' EXPIRED (age=" + (now - cached.timestamp) + "ms >= "
+                            + CAPABILITY_CACHE_VALIDITY_MS + "ms); ignoring");
+                    break;
                 }
+                LogUtil.i(TAG, "[DEEP LOG] getCachedCapability: In-memory HIT! Key='" + entry.getKey()
+                        + "' suffix='" + suffix + "' -> " + capabilityToString(cached.capability));
+                return cached.capability;
             }
             LogUtil.d(TAG, "[DEEP LOG] getCachedCapability: In-memory MISS for suffix '" + suffix + "'. Current cache keys: " + sCapabilityCache.keySet());
         }
@@ -365,7 +393,10 @@ public class CapabilityDiscoveryManager {
 
                         if (capability != CAPABILITY_UNKNOWN && (timestamp == 0 || ageMs < CAPABILITY_CACHE_VALIDITY_MS)) {
                             synchronized (sCapabilityCache) {
-                                sCapabilityCache.put(normalized, capability);
+                                // Carry the DB timestamp forward so the in-memory copy expires on
+                                // the row's real age, not on when we happened to read it.
+                                sCapabilityCache.put(normalized,
+                                        new CachedCapability(capability, timestamp > 0 ? timestamp : now));
                             }
                             LogUtil.i(TAG, "[DEEP LOG DB] Synchronous cache population SUCCESS for " + normalized + " -> " + capabilityToString(capability));
                             return capability;
@@ -603,8 +634,10 @@ public class CapabilityDiscoveryManager {
         final String normalized = normalizeDestination(context, destination);
         if (TextUtils.isEmpty(normalized)) return;
 
+        // Stamp memory and database with the same instant so the two copies expire together.
+        final long recordedAt = System.currentTimeMillis();
         synchronized (sCapabilityCache) {
-            sCapabilityCache.put(normalized, capability);
+            sCapabilityCache.put(normalized, new CachedCapability(capability, recordedAt));
         }
 
         sAsyncExecutor.execute(() -> {
@@ -612,7 +645,7 @@ public class CapabilityDiscoveryManager {
                 final DatabaseWrapper db = DataModel.get().getDatabase();
                 final ContentValues values = new ContentValues();
                 values.put(DatabaseHelper.ParticipantColumns.RCS_CAPABILITY, capability);
-                values.put(DatabaseHelper.ParticipantColumns.RCS_DISCOVERY_TIMESTAMP, System.currentTimeMillis());
+                values.put(DatabaseHelper.ParticipantColumns.RCS_DISCOVERY_TIMESTAMP, recordedAt);
 
                 final String digits = normalized.replaceAll("[^0-9]", "");
                 final String suffix = digits.length() >= 10 ? digits.substring(digits.length() - 10) : digits;
