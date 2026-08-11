@@ -42,6 +42,14 @@
         android:persistent="true" />
 
     <PreferenceScreen
+        android:key="@string/rcs_settings_pref_key"
+        android:title="@string/rcs_settings_title">
+        <intent
+            android:targetPackage="com.android.messaging"
+            android:targetClass="com.android.messaging.ui.appsettings.RcsSettingsActivity" />
+    </PreferenceScreen>
+
+    <PreferenceScreen
             android:key="@string/advanced_pref_key"
             android:title="@string/advanced_settings" />
 </PreferenceScreen>

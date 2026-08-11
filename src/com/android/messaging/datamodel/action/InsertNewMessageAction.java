@@ -28,6 +28,7 @@ import androidx.annotation.NonNull;
 
 import com.android.messaging.Factory;
 import com.android.messaging.datamodel.BugleDatabaseOperations;
+import com.android.messaging.datamodel.BugleNotifications;
 import com.android.messaging.datamodel.DataModel;
 import com.android.messaging.datamodel.DatabaseWrapper;
 import com.android.messaging.datamodel.MessagingContentProvider;
@@ -61,6 +62,26 @@ public class InsertNewMessageAction extends Action implements Parcelable {
     public static void insertNewMessage(final MessageData message) {
         final InsertNewMessageAction action = new InsertNewMessageAction(message);
         action.start();
+    }
+
+    /**
+     * Insert received message
+     */
+    public static void insertReceivedMessage(final MessageData message) {
+        final DatabaseWrapper db = DataModel.get().getDatabase();
+        db.beginTransaction();
+        try {
+            BugleDatabaseOperations.insertNewMessageInTransaction(db, message);
+            BugleDatabaseOperations.updateConversationMetadataInTransaction(db,
+                    message.getConversationId(), message.getMessageId(), message.getReceivedTimeStamp(),
+                    false /* senderBlocked */, false /* shouldAutoSwitchSelfId */);
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
+        MessagingContentProvider.notifyMessagesChanged(message.getConversationId());
+        MessagingContentProvider.notifyPartsChanged();
+        BugleNotifications.update(false /* silent */, message.getConversationId(), BugleNotifications.UPDATE_ALL);
     }
 
     /**

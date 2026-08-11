@@ -420,6 +420,7 @@
     <!-- The hint text shown in the message compose input box when RCS is available -->
     <string name="compose_message_view_hint_text_rcs">RCS message</string>
     <!-- RCS Chat settings screen title -->
+    <string name="rcs_settings_pref_key" translatable="false">rcs_settings_pref_key</string>
     <string name="rcs_settings_title">RCS Chat Features</string>
     <string name="rcs_settings_enable_title">Enable RCS Chat</string>
     <string name="rcs_settings_enable_summary">Use Wi-Fi or cellular data for rich messaging</string>

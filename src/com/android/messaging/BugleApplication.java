@@ -31,6 +31,7 @@ import android.telephony.CarrierConfigManager;
 import androidx.annotation.NonNull;
 
 import com.android.messaging.datamodel.DataModel;
+import com.android.messaging.rcs.RcsManager;
 import com.android.messaging.receiver.SmsReceiver;
 import com.android.messaging.sms.BugleApnSettingsLoader;
 import com.android.messaging.sms.BugleUserAgentInfoLoader;
@@ -121,6 +122,7 @@ public class BugleApplication extends Application implements UncaughtExceptionHa
         Trace.beginSection("app.initializeAsync");
         maybeHandleSharedPrefsUpgrade(factory);
         MmsConfig.load();
+        RcsManager.getInstance(factory.getApplicationContext()).startProvisioning();
         Trace.endSection();
     }
 

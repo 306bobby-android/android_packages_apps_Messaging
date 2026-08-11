@@ -33,8 +33,29 @@ public class RcsSettingsFragment extends PreferenceFragmentCompat {
     public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
         addPreferencesFromResource(R.xml.rcs_preferences);
 
+        final Preference enablePref = findPreference("pref_key_enable_rcs");
+        if (enablePref != null) {
+            enablePref.setOnPreferenceChangeListener((preference, newValue) -> {
+                final boolean enabled = (Boolean) newValue;
+                if (enabled) {
+                    RcsManager.getInstance(requireContext()).startProvisioning();
+                }
+                updateStatusSummary();
+                return true;
+            });
+        }
+        updateStatusSummary();
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        updateStatusSummary();
+    }
+
+    private void updateStatusSummary() {
         final Preference statusPref = findPreference("pref_key_rcs_status");
-        if (statusPref != null) {
+        if (statusPref != null && isAdded()) {
             final RcsManager rcsManager = RcsManager.getInstance(requireContext());
             switch (rcsManager.getState()) {
                 case RcsManager.STATE_REGISTERED:
