@@ -463,7 +463,7 @@ public class ConversationMessageView extends FrameLayout implements View.OnClick
         }
 
         final boolean metadataVisible = senderNameVisible || statusVisible
-                || deliveredBadgeVisible || simNameVisible;
+                || isOutgoingStatus || simNameVisible;
         mMessageMetadataView.setVisibility(metadataVisible ? View.VISIBLE : View.GONE);
 
         final boolean messageTextAndOrInfoVisible = titleVisible || subjectVisible

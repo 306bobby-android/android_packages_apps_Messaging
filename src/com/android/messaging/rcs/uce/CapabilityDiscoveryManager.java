@@ -26,6 +26,7 @@ import com.android.messaging.datamodel.DatabaseHelper;
 import com.android.messaging.datamodel.DatabaseWrapper;
 import com.android.messaging.datamodel.DataModel;
 import com.android.messaging.rcs.RcsManager;
+import com.android.messaging.rcs.sip.SipStackManager;
 import com.android.messaging.util.LogUtil;
 
 import java.lang.reflect.Method;
