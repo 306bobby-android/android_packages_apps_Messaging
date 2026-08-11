@@ -29,6 +29,7 @@ import android.telephony.ims.RcsUceAdapter;
 
 import com.android.messaging.rcs.acs.AcsClient;
 import com.android.messaging.rcs.acs.AcsConfig;
+import com.android.messaging.rcs.sip.SipDelegateProbe;
 import com.android.messaging.rcs.sip.SipStackManager;
 import com.android.messaging.util.LogUtil;
 
@@ -111,6 +112,8 @@ public class RcsManager {
      */
     public void startProvisioning() {
         LogUtil.i(TAG, "Starting Carrier ACS Provisioning...");
+        // Diagnostic: report whether IMS Single Registration can give us a real SIP transport.
+        SipDelegateProbe.runOnce(mContext);
         notifyStateChanged(STATE_CONNECTING, null);
         AcsClient.requestConfiguration(mContext, null, new AcsClient.AcsCallback() {
             @Override
