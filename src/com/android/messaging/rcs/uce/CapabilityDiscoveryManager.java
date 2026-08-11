@@ -172,6 +172,8 @@ public class CapabilityDiscoveryManager {
                                     for (Object capObj : capabilitiesList) {
                                         if (capObj == null) continue;
                                         try {
+                                            String contactDest = null;
+                                            boolean isCapable = true;
                                             if (contactDest == null) {
                                                 for (Method m : capObj.getClass().getMethods()) {
                                                     if (m.getReturnType().equals(Uri.class) && m.getParameterTypes().length == 0) {
