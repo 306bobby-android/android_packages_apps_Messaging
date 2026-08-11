@@ -78,11 +78,11 @@ public class CapabilityDiscoveryManager {
             return false;
         }
         final int cap = getCachedCapability(context, normalized);
-        if (cap == CAPABILITY_RCS_SUPPORTED) {
+        if (cap == CAPABILITY_RCS_SUPPORTED || cap == CAPABILITY_UNKNOWN) {
+            if (cap == CAPABILITY_UNKNOWN) {
+                requestPlatformCapabilityDiscovery(context, normalized);
+            }
             return true;
-        }
-        if (cap == CAPABILITY_UNKNOWN) {
-            requestPlatformCapabilityDiscovery(context, normalized);
         }
         return false;
     }
