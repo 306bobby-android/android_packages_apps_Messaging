@@ -427,15 +427,23 @@ public class SipDelegateTransport {
             LogUtil.w(TAG, "sendSipMessage: no SipDelegateConfiguration yet");
             return false;
         }
+        // SipMessage.toEncodedMessage() concatenates the start line and header section directly,
+        // appending only the single CRLF that separates headers from body. The start line must
+        // therefore carry its own terminator, or the request line runs into the first header and
+        // the message is rejected with MESSAGE_FAILURE_REASON_INVALID_START_LINE before it ever
+        // reaches the network.
+        final String terminatedStartLine =
+                startLine.endsWith("\r\n") ? startLine : startLine + "\r\n";
         try {
             final Class<?> sipMessageClass = Class.forName(CLS_SIP_MESSAGE);
             final Object message = sipMessageClass
                     .getConstructor(String.class, String.class, byte[].class)
-                    .newInstance(startLine, headerSection, content == null ? new byte[0] : content);
+                    .newInstance(terminatedStartLine, headerSection,
+                            content == null ? new byte[0] : content);
             connection.getClass().getMethod("sendMessage", sipMessageClass, long.class)
                     .invoke(connection, message, mConfigVersion);
-            LogUtil.i(TAG, "Sent SIP: " + startLine);
-            LogUtil.i(TAG, "[OUTBOUND SIP]\n" + startLine + "\n" + headerSection
+            LogUtil.i(TAG, "Sent SIP: " + startLine.trim());
+            LogUtil.i(TAG, "[OUTBOUND SIP]\n" + terminatedStartLine + headerSection
                     + (content != null && content.length > 0
                             ? "\n" + new String(content, java.nio.charset.StandardCharsets.UTF_8)
                             : ""));
