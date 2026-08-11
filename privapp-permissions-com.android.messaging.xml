@@ -28,5 +28,13 @@
              the filtered view offered to ordinary apps.
         -->
         <permission name="android.permission.READ_PRIVILEGED_PHONE_STATE"/>
+        <!--
+             Lets the app override carrier config so platform capability discovery can use SIP
+             OPTIONS. This carrier's presence server does not hold capabilities for its own RCS
+             users, and an app may not send OPTIONS itself: AOSP reserves that method for the
+             ImsService. The value must be an override because tmobile_us.pb sets the key
+             explicitly, and only an app-supplied override outranks the carrier config app.
+        -->
+        <permission name="android.permission.MODIFY_PHONE_STATE"/>
     </privapp-permissions>
 </permissions>

@@ -21,7 +21,6 @@ import android.text.TextUtils;
 
 import com.android.messaging.rcs.binding.RcsMessageReceiver;
 import com.android.messaging.rcs.sip.SipConfigSnapshot;
-import com.android.messaging.rcs.uce.CapabilityDiscoveryManager;
 import com.android.messaging.rcs.sip.SipDelegateTransport;
 import com.android.messaging.rcs.sip.SipHeaders;
 import com.android.messaging.util.LogUtil;
@@ -57,8 +56,6 @@ public class RcsChatSessionManager
     private final Map<String, SipHeaders> mInboundInvites = new ConcurrentHashMap<>();
     /** Via branch of each in-flight request, so send outcomes can be routed to their session. */
     private final Map<String, RcsChatSession> mSessionsByBranch = new ConcurrentHashMap<>();
-    /** Call-ID to destination for outstanding OPTIONS capability queries. */
-    private final Map<String, String> mPendingOptions = new ConcurrentHashMap<>();
 
     private final RcsChatSession.Callback mSessionCallback = new RcsChatSession.Callback() {
         @Override
@@ -147,82 +144,6 @@ public class RcsChatSessionManager
         return true;
     }
 
-    /**
-     * Asks a contact's device directly what it supports, using SIP OPTIONS.
-     *
-     * <p>Presence discovery only sees subscribers whose capabilities this carrier's presence
-     * server holds. On this network that excludes RCS users hosted elsewhere: contacts known to
-     * have working RCS come back NOT_FOUND, or FOUND with an empty document. OPTIONS goes to the
-     * contact rather than to a presence server, which is the mechanism GSMA defines for exactly
-     * that gap.
-     *
-     * @return true if the query was sent
-     */
-    public boolean queryCapabilityViaOptions(String destination) {
-        if (mTransport == null || !mTransport.isChatReady()) return false;
-        final SipConfigSnapshot config = getConfig();
-        if (config == null) return false;
-        final String remoteUri = toSipUri(mContext, destination, config.homeDomain);
-        if (remoteUri == null) return false;
-
-        final String callId = UUID.randomUUID().toString();
-        final StringBuilder h = new StringBuilder();
-        final String branch = appendVia(h, config);
-        h.append("Max-Forwards: 70\r\n");
-        if (!TextUtils.isEmpty(config.serviceRouteHeader)) {
-            h.append("Route: ").append(config.serviceRouteHeader).append("\r\n");
-        }
-        appendSecurityVerify(h, config);
-        h.append("From: <").append(config.localAor()).append(">;tag=")
-                .append(RcsChatSession.randomToken(8)).append("\r\n");
-        h.append("To: <").append(remoteUri).append(">\r\n");
-        h.append("Call-ID: ").append(callId).append("\r\n");
-        h.append("CSeq: 1 OPTIONS\r\n");
-        appendLocalContact(h, config);
-        h.append("Accept-Contact: *;").append(RcsChatSession.ICSI_CHAT_SESSION).append("\r\n");
-        h.append("P-Preferred-Identity: <").append(config.localAor()).append(">\r\n");
-        h.append("Accept: application/sdp\r\n");
-        appendUserAgent(h, config);
-        h.append("Content-Length: 0\r\n");
-
-        mPendingOptions.put(callId, destination);
-        LogUtil.i(TAG, "OPTIONS capability query -> " + remoteUri);
-        final boolean sent = mTransport.sendSipMessage(
-                "OPTIONS " + remoteUri + " SIP/2.0", h.toString(), new byte[0]);
-        if (!sent) mPendingOptions.remove(callId);
-        return sent;
-    }
-
-    /**
-     * Reads a peer's advertised feature tags out of an OPTIONS response and records the result.
-     */
-    private void handleOptionsResponse(int status, SipHeaders headers, String destination) {
-        if (status < 200 || status >= 300) {
-            // 404/480/604 are all legitimate "no RCS here" answers.
-            LogUtil.i(TAG, "OPTIONS for " + destination + " answered " + status
-                    + " -> NOT_SUPPORTED");
-            CapabilityDiscoveryManager.updateCapability(mContext, destination,
-                    CapabilityDiscoveryManager.CAPABILITY_NOT_SUPPORTED);
-            return;
-        }
-
-        final StringBuilder tags = new StringBuilder();
-        for (String value : headers.getAll("contact")) tags.append(value).append(' ');
-        for (String value : headers.getAll("accept-contact")) tags.append(value).append(' ');
-        final String advertised = tags.toString().toLowerCase(Locale.US);
-
-        final boolean chat = advertised.contains("oma.cpm.session")
-                || advertised.contains("oma.cpm.msg")
-                || advertised.contains("oma.cpm.largemsg")
-                || advertised.contains("gsma.rcs.cpm.pager-large")
-                || advertised.contains("iari.rcse.im");
-
-        LogUtil.i(TAG, "OPTIONS 200 for " + destination + "; chatAdvertised=" + chat);
-        CapabilityDiscoveryManager.updateCapability(mContext, destination,
-                chat ? CapabilityDiscoveryManager.CAPABILITY_RCS_SUPPORTED
-                     : CapabilityDiscoveryManager.CAPABILITY_NOT_SUPPORTED);
-    }
-
     // ---------------------------------------------------------------- inbound SIP
 
     @Override
@@ -257,6 +178,9 @@ public class RcsChatSessionManager
 
     private boolean handleResponse(String startLine, SipHeaders headers, String body,
             String callId) {
+        final RcsChatSession session = (callId != null) ? mSessionsByCallId.get(callId) : null;
+        if (session == null) return false;
+
         int status = -1;
         final String[] parts = startLine.split("\\s+", 3);
         if (parts.length >= 2) {
@@ -266,16 +190,6 @@ public class RcsChatSessionManager
                 return false;
             }
         }
-
-        // OPTIONS queries have no dialog, so they are matched before any session lookup.
-        if (callId != null && mPendingOptions.containsKey(callId)) {
-            if (status < 200) return true;
-            handleOptionsResponse(status, headers, mPendingOptions.remove(callId));
-            return true;
-        }
-
-        final RcsChatSession session = (callId != null) ? mSessionsByCallId.get(callId) : null;
-        if (session == null) return false;
         final String method = headers.getCSeqMethod();
         if (!"INVITE".equals(method)) {
             LogUtil.i(TAG, "Response " + status + " to " + method + " on " + callId);
@@ -320,8 +234,7 @@ public class RcsChatSessionManager
                 return session != null;
             }
             case "OPTIONS":
-                // Answer with our own feature tags so the peer can discover us the same way.
-                sendOptionsOk(headers);
+                sendSimpleResponse(headers, 200, "OK");
                 return true;
             case "MESSAGE":
                 // Pager mode is denied by this carrier, but answer politely if one arrives.
@@ -469,33 +382,6 @@ public class RcsChatSessionManager
 
         return mTransport.sendSipMessage("BYE " + session.getRemoteTarget() + " SIP/2.0",
                 h.toString(), new byte[0]);
-    }
-
-    private void appendLocalContact(StringBuilder h, SipConfigSnapshot config) {
-        h.append("Contact: <").append(config.localContactUri()).append(">")
-                .append(config.contactHeaderParams())
-                .append(';').append(RcsChatSession.ICSI_CHAT_SESSION).append("\r\n");
-    }
-
-    /** Answers an inbound OPTIONS with the capabilities this device supports. */
-    private void sendOptionsOk(SipHeaders request) {
-        final SipConfigSnapshot config = getConfig();
-        if (config == null || mTransport == null) {
-            sendSimpleResponse(request, 200, "OK");
-            return;
-        }
-        final StringBuilder h = new StringBuilder();
-        for (String via : request.getAll("via")) h.append("Via: ").append(via).append("\r\n");
-        h.append("From: ").append(request.getFirst("from")).append("\r\n");
-        h.append("To: ").append(withTag(request.getFirst("to"), RcsChatSession.randomToken(8)))
-                .append("\r\n");
-        h.append("Call-ID: ").append(request.getCallId()).append("\r\n");
-        h.append("CSeq: ").append(request.getFirst("cseq")).append("\r\n");
-        appendLocalContact(h, config);
-        h.append("Allow: INVITE, ACK, CANCEL, BYE, OPTIONS, UPDATE, MESSAGE, NOTIFY\r\n");
-        appendUserAgent(h, config);
-        h.append("Content-Length: 0\r\n");
-        mTransport.sendSipMessage("SIP/2.0 200 OK", h.toString(), new byte[0]);
     }
 
     /** Sends a response that only needs to echo the request's dialog identifiers. */
