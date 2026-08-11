@@ -422,15 +422,22 @@ public class ConversationMessageView extends FrameLayout implements View.OnClick
             mStatusTextView.setVisibility(View.GONE);
         }
 
-        final boolean deliveredBadgeVisible =
-                mData.getStatus() == MessageData.BUGLE_STATUS_OUTGOING_DELIVERED;
+        final int status = mData.getStatus();
+        final boolean isOutgoingStatus = (status == MessageData.BUGLE_STATUS_OUTGOING_COMPLETE
+                || status == MessageData.BUGLE_STATUS_OUTGOING_DELIVERED
+                || status == MessageData.BUGLE_STATUS_OUTGOING_READ);
+
         if (mDeliveredBadge instanceof android.widget.ImageView) {
             final android.widget.ImageView badgeImage = (android.widget.ImageView) mDeliveredBadge;
-            if (deliveredBadgeVisible) {
+            if (status == MessageData.BUGLE_STATUS_OUTGOING_READ) {
+                badgeImage.setImageResource(R.drawable.ic_rcs_read);
+            } else if (status == MessageData.BUGLE_STATUS_OUTGOING_DELIVERED) {
                 badgeImage.setImageResource(R.drawable.ic_rcs_delivered);
+            } else if (status == MessageData.BUGLE_STATUS_OUTGOING_COMPLETE) {
+                badgeImage.setImageResource(R.drawable.ic_rcs_sent);
             }
         }
-        mDeliveredBadge.setVisibility(deliveredBadgeVisible ? View.VISIBLE : View.GONE);
+        mDeliveredBadge.setVisibility(isOutgoingStatus ? View.VISIBLE : View.GONE);
 
         // Update the sim indicator.
         final boolean showSimIconAsIncoming = mData.getIsIncoming() &&

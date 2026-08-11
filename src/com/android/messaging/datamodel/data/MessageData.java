@@ -124,6 +124,7 @@ public class MessageData implements Parcelable {
     // Outgoing
     public static final int BUGLE_STATUS_OUTGOING_COMPLETE                = 1;
     public static final int BUGLE_STATUS_OUTGOING_DELIVERED               = 2;
+    public static final int BUGLE_STATUS_OUTGOING_READ                    = 16;
     // Transitions to either YET_TO_SEND or SEND_AFTER_PROCESSING depending attachments.
     public static final int BUGLE_STATUS_OUTGOING_DRAFT                   = 3;
     public static final int BUGLE_STATUS_OUTGOING_YET_TO_SEND             = 4;
