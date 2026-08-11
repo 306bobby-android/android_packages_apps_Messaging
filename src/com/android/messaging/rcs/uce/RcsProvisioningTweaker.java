@@ -48,21 +48,42 @@ import java.util.regex.Pattern;
  *   else             tech = UNSPECIFIED;
  * </pre>
  *
- * <p>and {@code UserCapabilityRule} reads it from the {@code defaultDisc} parameter under
- * {@code APPLICATION/PRESENCE/MESSAGING/CAPDISCOVERY}. This carrier provisions
- * {@code defaultDisc = 1}, selecting the presence mechanism that cannot see its own RCS users.
+ * <p>The carrier provisions {@code defaultDisc = 1} under
+ * {@code APPLICATION/PRESENCE/MESSAGING/CAPDISCOVERY}, which is where the spec puts it — but the
+ * vendor never looks there. Its own logs name the two paths it consults, and falls back to a
+ * hardcoded 1 when neither exists, which is how presence gets selected regardless of the document.
+ * See {@link #SERVICES_OPEN}.
  *
- * <p>Rather than patch the vendor APK, the configuration it reads is amended: exactly one
- * attribute value is spliced and the document handed back through
- * {@link ProvisioningManager#notifyRcsAutoConfigurationReceived}. Everything else stays byte for
- * byte as the carrier sent it.
+ * <p>Rather than patch the vendor APK, the configuration it reads is amended: the parameter is
+ * written into the node it actually consults and the document handed back through
+ * {@link ProvisioningManager#notifyRcsAutoConfigurationReceived}. Everything else stays as the
+ * carrier sent it.
  */
 public final class RcsProvisioningTweaker {
     private static final String TAG = "RcsProvisioningTweaker";
 
-    /** The CAPDISCOVERY parameter that selects the discovery mechanism. */
+    /** Any existing defaultDisc parameter, wherever it appears. */
     private static final Pattern DEFAULT_DISC = Pattern.compile(
             "<parm\\s+name=\"defaultDisc\"\\s+value=\"([^\"]*)\"", Pattern.CASE_INSENSITIVE);
+
+    /**
+     * Opening tag of the SERVICES characteristic.
+     *
+     * <p>The vendor does not read defaultDisc from where the spec puts it. Its own logs show the
+     * two paths it consults, neither of which is the CAPDISCOVERY node the carrier populates:
+     *
+     * <pre>
+     *   getIntegerValue, not exist /ShannonRcs/310/260/defaultDisc
+     *   getIntegerValue, not exist /ap2008/SERVICES/defaultDisc
+     *   getDefaultDiscValue: 1
+     * </pre>
+     *
+     * <p>{@code ap2008} is the document's AppID, so the node it wants is APPLICATION/SERVICES.
+     * With neither present it falls back to a hardcoded 1, i.e. presence. The parameter is
+     * therefore inserted there.
+     */
+    private static final Pattern SERVICES_OPEN = Pattern.compile(
+            "<characteristic\\s+type=\"SERVICES\"\\s*>", Pattern.CASE_INSENSITIVE);
 
     /** Value that selects OPTIONS in the vendor's rule evaluation. */
     private static final String DISC_OPTIONS = "0";
@@ -115,32 +136,69 @@ public final class RcsProvisioningTweaker {
         if (configBytes == null || configBytes.length == 0) return;
         try {
             final String xml = new String(configBytes, StandardCharsets.UTF_8);
-            final Matcher m = DEFAULT_DISC.matcher(xml);
-            if (!m.find()) {
-                LogUtil.i(TAG, "Provisioning carries no defaultDisc parameter; leaving it alone");
-                return;
-            }
-
-            final String current = m.group(1);
-            LogUtil.i(TAG, "Provisioned defaultDisc=" + current + " (0=OPTIONS, 1=presence)");
-            if (DISC_OPTIONS.equals(current)) {
-                // Already OPTIONS. This is also what keeps the re-injection below from looping,
-                // since notifying a new configuration fires this callback again.
+            final String patched = withOptionsDiscovery(xml);
+            if (patched == null) {
                 LogUtil.i(TAG, "Discovery already provisioned as OPTIONS");
                 return;
             }
-
-            // Splice only the value so the rest of the document is untouched; a broader rewrite
-            // risks disturbing parameters the carrier depends on.
-            final String patched =
-                    xml.substring(0, m.start(1)) + DISC_OPTIONS + xml.substring(m.end(1));
-            LogUtil.i(TAG, "Rewriting defaultDisc " + current + " -> " + DISC_OPTIONS
-                    + "; re-provisioning " + patched.length() + " bytes");
-
+            LogUtil.i(TAG, "Re-provisioning " + patched.length() + " bytes with "
+                    + "SERVICES/defaultDisc=" + DISC_OPTIONS);
             sManager.notifyRcsAutoConfigurationReceived(
                     patched.getBytes(StandardCharsets.UTF_8), false /* isCompressed */);
         } catch (Exception e) {
             LogUtil.e(TAG, "Failed to re-provision RCS configuration", e);
         }
+    }
+
+    /**
+     * Returns the document with OPTIONS-based discovery provisioned, or null if it already is.
+     *
+     * <p>The parameter is written under SERVICES because that is where the vendor looks. Any
+     * existing occurrence elsewhere is corrected too, so the document does not contradict itself.
+     */
+    private static String withOptionsDiscovery(String xml) {
+        final Matcher services = SERVICES_OPEN.matcher(xml);
+        if (!services.find()) {
+            LogUtil.w(TAG, "No SERVICES characteristic in the provisioning document");
+            return null;
+        }
+
+        // Is there already a defaultDisc inside SERVICES, before that characteristic closes?
+        final int servicesEnd = xml.indexOf("</characteristic>", services.end());
+        final Matcher any = DEFAULT_DISC.matcher(xml);
+        String result = xml;
+        boolean inServices = false;
+        int changes = 0;
+
+        while (any.find()) {
+            final String value = any.group(1);
+            if (any.start() > services.end() && (servicesEnd < 0 || any.start() < servicesEnd)) {
+                inServices = true;
+                if (DISC_OPTIONS.equals(value)) {
+                    LogUtil.i(TAG, "SERVICES/defaultDisc is already " + DISC_OPTIONS);
+                    return null;
+                }
+            }
+            LogUtil.i(TAG, "Found defaultDisc=" + value
+                    + (any.start() > services.end() && (servicesEnd < 0 || any.start() < servicesEnd)
+                            ? " (in SERVICES)" : " (elsewhere)"));
+            changes++;
+        }
+
+        // Correct every occurrence, wherever it sits.
+        result = DEFAULT_DISC.matcher(result).replaceAll(
+                Matcher.quoteReplacement("<parm name=\"defaultDisc\" value=\"" + DISC_OPTIONS + "\""));
+
+        if (!inServices) {
+            // Insert it where the vendor actually reads it.
+            final Matcher m2 = SERVICES_OPEN.matcher(result);
+            if (!m2.find()) return null;
+            result = result.substring(0, m2.end())
+                    + "<parm name=\"defaultDisc\" value=\"" + DISC_OPTIONS + "\"/>"
+                    + result.substring(m2.end());
+            LogUtil.i(TAG, "Inserted defaultDisc into SERVICES (" + changes
+                    + " other occurrence(s) corrected)");
+        }
+        return result;
     }
 }
