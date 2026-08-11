@@ -43,7 +43,7 @@ import javax.net.ssl.SSLSocketFactory;
 
 /**
  * Socket-level SIP Stack Manager for P-CSCF registration, signaling, and message transport.
- * Supports both UDP (SIPoUDP) and TCP/TLS transports.
+ * Supports both UDP (SIPoUDP) and TCP/TLS transports with automatic protocol fallback.
  */
 public class SipStackManager {
     private static final String TAG = "SipStackManager";
@@ -103,7 +103,7 @@ public class SipStackManager {
                     LogUtil.i(TAG, "Initializing SIPoUDP DatagramSocket to " + mTargetAddress.getHostAddress());
                     mUdpSocket = new DatagramSocket();
                     bindSocketToCellularOrIms(mUdpSocket);
-                    mUdpSocket.setSoTimeout(15000);
+                    mUdpSocket.setSoTimeout(10000);
                     mIsConnected.set(true);
                     startUdpReaderThread();
                 } else {
@@ -129,6 +129,29 @@ public class SipStackManager {
             } catch (Exception e) {
                 LogUtil.e(TAG, "Failed to connect socket to P-CSCF", e);
                 mIsConnected.set(false);
+            }
+        }).start();
+    }
+
+    private void switchToTcpTransport() {
+        new Thread(() -> {
+            try {
+                LogUtil.i(TAG, "Switching to SIP TCP Transport on " + mTargetAddress.getHostAddress() + ":" + mTargetPort);
+                if (mUdpSocket != null) {
+                    try { mUdpSocket.close(); } catch (Exception ignored) {}
+                }
+                mUseUdp = false;
+                mTcpSocket = new Socket();
+                bindSocketToCellularOrIms(mTcpSocket);
+                mTcpSocket.connect(new InetSocketAddress(mTargetAddress, mTargetPort), 10000);
+                mInputStream = mTcpSocket.getInputStream();
+                mOutputStream = mTcpSocket.getOutputStream();
+                mIsConnected.set(true);
+                startTcpReaderThread();
+                LogUtil.i(TAG, "TCP Socket connected successfully to P-CSCF!");
+                sendRegister(null, null);
+            } catch (Exception e) {
+                LogUtil.e(TAG, "TCP Fallback connection failed", e);
             }
         }).start();
     }
@@ -329,8 +352,9 @@ public class SipStackManager {
                     handleIncomingSipMessage(message);
                 } catch (Exception e) {
                     if (mIsConnected.get()) {
-                        LogUtil.w(TAG, "UDP receive timeout/exception: " + e.getMessage());
-                        try { Thread.sleep(500); } catch (InterruptedException ignored) {}
+                        LogUtil.w(TAG, "UDP receive timeout: " + e.getMessage() + ", trying TCP fallback...");
+                        switchToTcpTransport();
+                        break;
                     }
                 }
             }
