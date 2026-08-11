@@ -168,8 +168,8 @@ public class ContactListItemView extends LinearLayout implements OnClickListener
         }
 
         final String destination = (mData.getDestination() != null) ? mData.getDestination().toString() : "";
-        final int capability = com.android.messaging.rcs.uce.CapabilityDiscoveryManager.getCachedCapability(getContext(), destination);
-        final float alpha = (capability == com.android.messaging.rcs.uce.CapabilityDiscoveryManager.CAPABILITY_NOT_SUPPORTED) ? 0.65f : 1.0f;
+        final boolean isRcs = com.android.messaging.rcs.uce.CapabilityDiscoveryManager.isRcsRecipient(getContext(), destination);
+        final float alpha = isRcs ? 1.0f : 0.65f;
         mContactNameTextView.setAlpha(alpha);
         mContactDetailsTextView.setAlpha(alpha);
         mContactDetailTypeTextView.setAlpha(alpha);

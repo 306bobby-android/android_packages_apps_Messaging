@@ -358,6 +358,41 @@ public class SipStackManager {
         return null;
     }
 
+    /**
+     * Transmits a SIP OPTIONS request to query contact RCS capabilities.
+     */
+    public void sendOptions(String destination) {
+        try {
+            if (!mIsConnected.get() || destination == null) return;
+            final String formattedDest = destination.startsWith("+") ? destination : "+" + destination;
+            final String callId = UUID.randomUUID().toString();
+            final String branch = "z9hG4bK" + UUID.randomUUID().toString().replace("-", "");
+            final String targetUri = "sip:" + formattedDest + "@" + mConfig.getSipDomain();
+
+            final StringBuilder sb = new StringBuilder();
+            sb.append("OPTIONS ").append(targetUri).append(" SIP/2.0\r\n");
+            sb.append("Via: SIP/2.0/UDP ").append(mConfig.getPCscfAddress()).append(";branch=").append(branch).append("\r\n");
+            sb.append("From: <sip:self@").append(mConfig.getSipDomain()).append(">;tag=").append(UUID.randomUUID().toString().substring(0, 8)).append("\r\n");
+            sb.append("To: <").append(targetUri).append(">\r\n");
+            sb.append("Call-ID: ").append(callId).append("\r\n");
+            sb.append("CSeq: ").append(mCSeq++).append(" OPTIONS\r\n");
+            sb.append("Accept: application/sdp, text/plain, message/cpim\r\n");
+            sb.append("Content-Length: 0\r\n\r\n");
+
+            final byte[] bytes = sb.toString().getBytes("UTF-8");
+            if (mUseUdp && mUdpSocket != null) {
+                final DatagramPacket packet = new DatagramPacket(bytes, bytes.length, mTargetAddress, mTargetPort);
+                mUdpSocket.send(packet);
+            } else if (mOutputStream != null) {
+                mOutputStream.write(bytes);
+                mOutputStream.flush();
+            }
+            LogUtil.i(TAG, "Sent SIP OPTIONS capability query for " + destination);
+        } catch (Exception e) {
+            LogUtil.w(TAG, "Failed to send SIP OPTIONS query: " + e.getMessage());
+        }
+    }
+
     public void disconnect() {
         mIsConnected.set(false);
         try {

@@ -95,6 +95,10 @@ public class CapabilityDiscoveryManager {
     public static void requestPlatformCapabilityDiscovery(Context context, String destination) {
         if (TextUtils.isEmpty(destination)) return;
         try {
+            final SipStackManager sipManager = RcsManager.getInstance(context).getSipStackManager();
+            if (sipManager != null) {
+                sipManager.sendOptions(destination);
+            }
             final Object uceAdapter = RcsManager.getInstance(context).getPlatformUceAdapter();
             if (uceAdapter != null) {
                 final Uri contactUri = Uri.parse("tel:" + destination);
