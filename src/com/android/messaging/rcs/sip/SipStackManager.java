@@ -382,7 +382,12 @@ public class SipStackManager {
      */
     public void sendOptions(String destination) {
         try {
-            if (!mIsConnected.get() || destination == null) return;
+            if (destination == null) return;
+            if (!mIsConnected.get() || mTargetAddress == null) {
+                LogUtil.w(TAG, "sendOptions: SipStackManager is not connected to P-CSCF (mIsConnected=" + mIsConnected.get() + ", targetAddr=" + mTargetAddress + "). Triggering connection...");
+                connectAndRegister();
+                return;
+            }
             final String formattedDest = destination.startsWith("+") ? destination : "+" + destination;
             final String callId = UUID.randomUUID().toString();
             final String branch = "z9hG4bK" + UUID.randomUUID().toString().replace("-", "");
