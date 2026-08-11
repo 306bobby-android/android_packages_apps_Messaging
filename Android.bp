@@ -100,7 +100,11 @@ android_app {
         enabled: true,
     },
 
-    sdk_version: "current",
+    // system_current, not current: this app is privileged and ships in the ROM, and the RCS work
+    // needs @SystemApi surfaces such as ProvisioningManager.RcsProvisioningCallback (a class, so
+    // it must be subclassed rather than proxied) and notifyRcsAutoConfigurationReceived.
+    // system_current is a superset of current, so nothing that compiled before stops compiling.
+    sdk_version: "system_current",
 
     product_specific: true,
 
