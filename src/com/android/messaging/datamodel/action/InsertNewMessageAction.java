@@ -176,9 +176,23 @@ public class InsertNewMessageAction extends Action implements Parcelable {
         LogUtil.i(TAG, "InsertNewMessageAction: inserting new message for subId " + subId);
         actionParameters.putInt(KEY_SUB_ID, subId);
 
-        // TODO: Work out whether to send with SMS or MMS (taking into account recipients)?
-        final boolean isSms = (message.getProtocol() == MessageData.PROTOCOL_SMS);
-        if (isSms) {
+        final Context context = Factory.get().getApplicationContext();
+        boolean isRcs = (message.getProtocol() == MessageData.PROTOCOL_RCS);
+        if (!isRcs && recipients.size() == 1 && !message.getIsMms()) {
+            final String recipient = recipients.get(0);
+            if (com.android.messaging.rcs.RcsManager.getInstance(context).isRcsAvailable()
+                    && com.android.messaging.rcs.uce.CapabilityDiscoveryManager.isRcsRecipient(context, recipient)) {
+                isRcs = true;
+                message.setProtocol(MessageData.PROTOCOL_RCS);
+            }
+        }
+
+        if (isRcs) {
+            final String recipient = recipients.get(0);
+            insertSendingRcsMessage(message, subId, recipient, timestamp, conversationId);
+            BugleDatabaseOperations.updateDraftMessageData(db, conversationId,
+                    null /* message */, BugleDatabaseOperations.UPDATE_MODE_CLEAR_DRAFT);
+        } else if (message.getProtocol() == MessageData.PROTOCOL_SMS) {
             String sendingConversationId = conversationId;
             if (recipients.size() > 1) {
                 // Broadcast SMS - put message in "fake conversation" before farming out to real 1:1
@@ -435,6 +449,53 @@ public class InsertNewMessageAction extends Action implements Parcelable {
             MessagingContentProvider.notifyPartsChanged();
         } else {
             LogUtil.e(TAG, "InsertNewMessageAction: No uri for SMS inserted into telephony DB");
+        }
+
+        return message;
+    }
+
+    /**
+     * Insert RCS message into database and queue for RCS transmission.
+     */
+    private MessageData insertSendingRcsMessage(final MessageData content, final int subId,
+            final String recipient, final long timestamp, final String sendingConversationId) {
+        final Context context = Factory.get().getApplicationContext();
+        final DatabaseWrapper db = DataModel.get().getDatabase();
+
+        long threadId;
+        String conversationId;
+        if (sendingConversationId == null) {
+            threadId = MmsUtils.getOrCreateSmsThreadId(context, recipient);
+            conversationId = BugleDatabaseOperations.getOrCreateConversationFromRecipient(
+                    db, threadId, false, ParticipantData.getFromRawPhoneBySimLocale(recipient, subId));
+        } else {
+            threadId = BugleDatabaseOperations.getThreadId(db, sendingConversationId);
+            conversationId = sendingConversationId;
+        }
+
+        final String messageText = content.getMessageText();
+        final Uri messageUri = MmsUtils.insertSmsMessage(context,
+                Telephony.Sms.CONTENT_URI, subId, recipient, messageText,
+                timestamp, Telephony.Sms.STATUS_NONE, Telephony.Sms.MESSAGE_TYPE_SENT, threadId);
+
+        MessageData message = null;
+        if (messageUri != null && !TextUtils.isEmpty(messageUri.toString())) {
+            db.beginTransaction();
+            try {
+                message = MessageData.createRcsMessage(recipient, messageText, timestamp, UUID.randomUUID().toString());
+                message.bindConversationId(conversationId);
+                message.bindSelfId(content.getSelfId());
+                message.updateSendingMessage(conversationId, messageUri, timestamp);
+                BugleDatabaseOperations.insertNewMessageInTransaction(db, message);
+                BugleDatabaseOperations.updateConversationMetadataInTransaction(db,
+                        conversationId, message.getMessageId(), timestamp, false, false);
+                db.setTransactionSuccessful();
+            } finally {
+                db.endTransaction();
+            }
+            LogUtil.i(TAG, "InsertNewMessageAction: Inserted RCS message " + message.getMessageId() + " for " + recipient);
+            MessagingContentProvider.notifyMessagesChanged(conversationId);
+            MessagingContentProvider.notifyPartsChanged();
         }
 
         return message;

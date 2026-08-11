@@ -673,6 +673,10 @@ public class MessageData implements Parcelable {
         return getIsRcs(mProtocol);
     }
 
+    public void setProtocol(final int protocol) {
+        mProtocol = protocol;
+    }
+
     public static boolean getIsIncoming(final int status) {
         return (status >= MessageData.BUGLE_STATUS_FIRST_INCOMING);
     }
