@@ -54,6 +54,8 @@ public class RcsChatSessionManager
     private final Map<String, RcsChatSession> mSessionsByRemote = new ConcurrentHashMap<>();
     /** Headers of an inbound INVITE, retained so the 200 OK can echo them. */
     private final Map<String, SipHeaders> mInboundInvites = new ConcurrentHashMap<>();
+    /** Via branch of each in-flight request, so send outcomes can be routed to their session. */
+    private final Map<String, RcsChatSession> mSessionsByBranch = new ConcurrentHashMap<>();
 
     private final RcsChatSession.Callback mSessionCallback = new RcsChatSession.Callback() {
         @Override
@@ -74,6 +76,7 @@ public class RcsChatSessionManager
             mSessionsByCallId.remove(session.getCallId());
             mSessionsByRemote.remove(normalizeUri(session.getRemoteUri()));
             mInboundInvites.remove(session.getCallId());
+            mSessionsByBranch.values().remove(session);
             if (mTransport != null) mTransport.cleanupSession(session.getCallId());
         }
 
@@ -154,6 +157,23 @@ public class RcsChatSessionManager
             return handleResponse(startLine, headers, body, callId);
         }
         return handleRequest(startLine, headers, body, callId);
+    }
+
+    @Override
+    public void onSipSendFailure(String viaBranch, int reason) {
+        final RcsChatSession session =
+                (viaBranch != null) ? mSessionsByBranch.remove(viaBranch) : null;
+        if (session == null) return;
+        if (reason == SipDelegateTransport.FAILURE_INVALID_START_LINE
+                && session.retryWithNextRequestUri()) {
+            return;
+        }
+        session.terminate("ImsService rejected the request (reason " + reason + ")");
+    }
+
+    @Override
+    public void onSipSendSuccess(String viaBranch) {
+        if (viaBranch != null) mSessionsByBranch.remove(viaBranch);
     }
 
     private boolean handleResponse(String startLine, SipHeaders headers, String body,
@@ -266,7 +286,8 @@ public class RcsChatSessionManager
 
         final String startLine = "INVITE " + session.getRemoteUri() + " SIP/2.0";
         final StringBuilder h = new StringBuilder();
-        appendVia(h, config);
+        final String branch = appendVia(h, config);
+        mSessionsByBranch.put(branch, session);
         h.append("Max-Forwards: 70\r\n");
         appendRoute(h, config, session);
         h.append("From: <").append(config.localAor()).append(">;tag=")
@@ -377,13 +398,16 @@ public class RcsChatSessionManager
 
     // ---------------------------------------------------------------- header helpers
 
-    private void appendVia(StringBuilder h, SipConfigSnapshot config) {
+    /** @return the branch parameter generated for this request */
+    private String appendVia(StringBuilder h, SipConfigSnapshot config) {
         final String host = SipConfigSnapshot.formatHost(config.localIpLiteral());
         final int port = config.localAddress != null ? config.localAddress.getPort() : 5060;
+        final String branch = "z9hG4bK" + RcsChatSession.randomToken(16);
         h.append("Via: SIP/2.0/").append(config.transportName()).append(' ')
                 .append(host).append(':').append(port)
-                .append(";branch=z9hG4bK").append(RcsChatSession.randomToken(16))
+                .append(";branch=").append(branch)
                 .append(";rport\r\n");
+        return branch;
     }
 
     private void appendRoute(StringBuilder h, SipConfigSnapshot config, RcsChatSession session) {

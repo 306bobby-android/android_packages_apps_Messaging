@@ -76,13 +76,41 @@ public class SipDelegateTransport {
     public static final String FEATURE_TAG_CHAT_SESSION =
             "+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.oma.cpm.session\"";
 
-    /** Receives inbound SIP traffic handed up by the delegate. */
+    /** Receives inbound SIP traffic and outbound delivery outcomes from the delegate. */
     public interface SipMessageListener {
         /**
          * @return true if this listener consumed the message. The transport acknowledges the
          *         message to the ImsService either way, but an unconsumed message is logged.
          */
         boolean onSipMessage(String startLine, String headerSection, byte[] content);
+
+        /** The ImsService refused to transmit a message we sent. */
+        default void onSipSendFailure(String viaBranch, int reason) {}
+
+        /** The ImsService transmitted a message we sent. */
+        default void onSipSendSuccess(String viaBranch) {}
+    }
+
+    // Mirrors SipDelegateManager.MESSAGE_FAILURE_REASON_*.
+    public static final int FAILURE_INVALID_START_LINE = 3;
+    public static final int FAILURE_INVALID_HEADER_FIELDS = 4;
+    public static final int FAILURE_INVALID_BODY_CONTENT = 5;
+
+    private static String failureReasonToString(int reason) {
+        switch (reason) {
+            case 1: return "DELEGATE_DEAD";
+            case 2: return "DELEGATE_CLOSED";
+            case FAILURE_INVALID_START_LINE: return "INVALID_START_LINE";
+            case FAILURE_INVALID_HEADER_FIELDS: return "INVALID_HEADER_FIELDS";
+            case FAILURE_INVALID_BODY_CONTENT: return "INVALID_BODY_CONTENT";
+            case 6: return "INVALID_FEATURE_TAG";
+            case 7: return "TAG_NOT_ENABLED_FOR_DELEGATE";
+            case 8: return "NETWORK_NOT_AVAILABLE";
+            case 9: return "NOT_REGISTERED";
+            case 10: return "STALE_IMS_CONFIGURATION";
+            case 11: return "INTERNAL_DELEGATE_STATE_TRANSITION";
+            default: return "UNKNOWN(" + reason + ")";
+        }
     }
 
     private static SipDelegateTransport sInstance;
@@ -295,9 +323,39 @@ public class SipDelegateTransport {
     // ---------------------------------------------------------------- inbound messages
 
     private void handleMessageCallback(String name, Object[] args) {
+        // onMessageSent and onMessageSendFailure must be told apart. Logging every non-received
+        // callback as "sent" reports outright rejections as successes.
+        if ("onMessageSent".equals(name)) {
+            final String branch = (args != null && args.length > 0) ? String.valueOf(args[0]) : null;
+            LogUtil.i(TAG, "SIP transmitted, branch=" + branch);
+            for (SipMessageListener listener : mListeners) {
+                try {
+                    listener.onSipSendSuccess(branch);
+                } catch (Throwable t) {
+                    LogUtil.e(TAG, "Listener threw on send success", t);
+                }
+            }
+            return;
+        }
+        if ("onMessageSendFailure".equals(name)) {
+            final String branch = (args != null && args.length > 0) ? String.valueOf(args[0]) : null;
+            int reason = 0;
+            if (args != null && args.length > 1 && args[1] instanceof Integer) {
+                reason = (Integer) args[1];
+            }
+            LogUtil.e(TAG, "SIP REJECTED by ImsService: reason=" + failureReasonToString(reason)
+                    + " branch=" + branch);
+            for (SipMessageListener listener : mListeners) {
+                try {
+                    listener.onSipSendFailure(branch, reason);
+                } catch (Throwable t) {
+                    LogUtil.e(TAG, "Listener threw on send failure", t);
+                }
+            }
+            return;
+        }
         if (!"onMessageReceived".equals(name)) {
-            // onMessageSent(viaTransactionId) — the ImsService confirming our outbound message.
-            LogUtil.i(TAG, "onMessageSent: " + (args != null && args.length > 0 ? args[0] : ""));
+            LogUtil.i(TAG, "Unhandled message callback: " + name);
             return;
         }
         final Object sipMessage = (args != null && args.length > 0) ? args[0] : null;

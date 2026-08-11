@@ -69,7 +69,18 @@ public class RcsChatSession {
     private final Callback mCallback;
     private final boolean mIncoming;
 
-    private final String mRemoteUri;
+    /**
+     * Request-URI forms to try, in order.
+     *
+     * <p>The vendor stack rejects an INVITE it dislikes with
+     * MESSAGE_FAILURE_REASON_INVALID_START_LINE before anything reaches the network, and gives no
+     * indication of which part it objected to. Rather than burn a build cycle per guess, a
+     * rejected start line advances to the next form and re-sends.
+     */
+    private final List<String> mRequestUriCandidates = new ArrayList<>();
+    private int mRequestUriIndex;
+
+    private String mRemoteUri;
     private final String mCallId;
     private final String mLocalTag;
     private String mRemoteTag;
@@ -108,6 +119,51 @@ public class RcsChatSession {
         mCallback = callback;
         mLocalTag = randomToken(8);
         mMsrpSessionId = randomToken(12);
+        buildRequestUriCandidates(remoteUri);
+    }
+
+    /** Derives the alternative Request-URI spellings from the primary one. */
+    private void buildRequestUriCandidates(String primary) {
+        mRequestUriCandidates.add(primary);
+        if (primary == null || !primary.startsWith("sip:")) return;
+
+        final String withoutScheme = primary.substring(4);
+        final int at = withoutScheme.indexOf('@');
+        if (at < 0) return;
+        final String user = withoutScheme.substring(0, at);
+        String domain = withoutScheme.substring(at + 1);
+        final int semi = domain.indexOf(';');
+        if (semi >= 0) domain = domain.substring(0, semi);
+
+        addCandidate("tel:" + user);
+        addCandidate("sip:" + user + "@" + domain);
+    }
+
+    private void addCandidate(String uri) {
+        if (uri != null && !mRequestUriCandidates.contains(uri)) {
+            mRequestUriCandidates.add(uri);
+        }
+    }
+
+    /**
+     * Switches to the next Request-URI spelling after a rejected start line.
+     *
+     * @return true if another form was available and a fresh INVITE was sent
+     */
+    boolean retryWithNextRequestUri() {
+        cancelInviteTimeout();
+        if (mRequestUriIndex + 1 >= mRequestUriCandidates.size()) {
+            LogUtil.w(TAG, "No Request-URI forms left to try for " + mRemoteUri);
+            return false;
+        }
+        mRequestUriIndex++;
+        mRemoteUri = mRequestUriCandidates.get(mRequestUriIndex);
+        mLocalCSeq = 1;
+        mState = State.IDLE;
+        LogUtil.i(TAG, "Start line rejected; retrying with Request-URI form "
+                + (mRequestUriIndex + 1) + "/" + mRequestUriCandidates.size() + ": " + mRemoteUri);
+        start();
+        return true;
     }
 
     public String getCallId() {
