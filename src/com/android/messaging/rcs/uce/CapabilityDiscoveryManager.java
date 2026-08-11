@@ -60,7 +60,7 @@ public class CapabilityDiscoveryManager {
     /**
      * Normalizes destination phone number to E.164 standard (+1XXXXXXXXXX).
      */
-    private static String normalizeDestination(Context context, String destination) {
+    public static String normalizeDestination(Context context, String destination) {
         if (TextUtils.isEmpty(destination)) return "";
         final String digits = destination.replaceAll("[^0-9+]", "");
         if (digits.startsWith("+")) return digits;
@@ -169,33 +169,34 @@ public class CapabilityDiscoveryManager {
                                 final Object arg = (args != null && args.length > 0) ? args[0] : null;
                                 if (arg instanceof List) {
                                     final List<?> capabilitiesList = (List<?>) arg;
+                                    LogUtil.i(TAG, "onCapabilitiesReceived payload list count: " + capabilitiesList.size());
                                     for (Object capObj : capabilitiesList) {
                                         if (capObj == null) continue;
                                         try {
                                             String contactDest = null;
-                                            boolean isCapable = true;
-                                            if (contactDest == null) {
-                                                for (Method m : capObj.getClass().getMethods()) {
-                                                    if (m.getReturnType().equals(Uri.class) && m.getParameterTypes().length == 0) {
-                                                        try {
-                                                            final Uri u = (Uri) m.invoke(capObj);
-                                                            if (u != null) {
-                                                                contactDest = u.getSchemeSpecificPart();
-                                                                break;
-                                                            }
-                                                        } catch (Exception ignored) {}
-                                                    }
+                                            for (Method m : capObj.getClass().getMethods()) {
+                                                if (m.getReturnType().equals(Uri.class) && m.getParameterTypes().length == 0) {
+                                                    try {
+                                                        final Uri u = (Uri) m.invoke(capObj);
+                                                        if (u != null) {
+                                                            contactDest = u.getSchemeSpecificPart();
+                                                            break;
+                                                        }
+                                                    } catch (Exception ignored) {}
                                                 }
                                             }
 
-                                            if (contactDest == null && !uris.isEmpty()) {
-                                                contactDest = uris.get(0).getSchemeSpecificPart();
-                                            }
+                                            boolean isCapable = true;
+                                            try {
+                                                final Method isCapMethod = capObj.getClass().getMethod("isCapable", int.class);
+                                                final Boolean isCapRes = (Boolean) isCapMethod.invoke(capObj, 1);
+                                                if (isCapRes != null) isCapable = isCapRes;
+                                            } catch (Exception ignored) {}
 
                                             if (contactDest != null) {
                                                 final int resCap = isCapable ? CAPABILITY_RCS_SUPPORTED : CAPABILITY_NOT_SUPPORTED;
                                                 updateCapability(context, contactDest, resCap);
-                                                LogUtil.i(TAG, "Batch resolved RCS capability for " + contactDest + " -> " + resCap);
+                                                LogUtil.i(TAG, "Batch resolved RCS capability for " + contactDest + " -> " + resCap + " (isCapable=" + isCapable + ")");
                                             }
                                         } catch (Exception e) {
                                             LogUtil.w(TAG, "Error parsing batch contact capability item: " + e.getMessage());
