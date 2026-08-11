@@ -29,6 +29,7 @@ import com.android.messaging.datamodel.DataModel;
 import com.android.messaging.rcs.RcsManager;
 import com.android.messaging.rcs.sip.SipStackManager;
 import com.android.messaging.util.LogUtil;
+import com.android.messaging.util.PhoneUtils;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
@@ -46,22 +47,38 @@ public class CapabilityDiscoveryManager {
     public static final int CAPABILITY_NOT_SUPPORTED = 2;
 
     private static final long CAPABILITY_CACHE_VALIDITY_MS = 24 * 60 * 60 * 1000L; // 24 hours
+    private static final long MIN_DISCOVERY_INTERVAL_MS = 30 * 1000L; // 30 seconds debounce
+
     private static final ArrayMap<String, Integer> sCapabilityCache = new ArrayMap<>();
+    private static final ArrayMap<String, Long> sLastDiscoveryMap = new ArrayMap<>();
     private static final Executor sAsyncExecutor = Executors.newSingleThreadExecutor();
+
+    /**
+     * Normalizes destination phone number to E.164 standard (+1XXXXXXXXXX).
+     */
+    private static String normalizeDestination(Context context, String destination) {
+        if (TextUtils.isEmpty(destination)) return "";
+        final String digits = destination.replaceAll("[^0-9+]", "");
+        if (digits.startsWith("+")) return digits;
+        if (digits.length() == 10) return "+1" + digits;
+        if (digits.length() == 11 && digits.startsWith("1")) return "+" + digits;
+        return PhoneUtils.get(context).getCanonicalBySimLocale(destination);
+    }
 
     /**
      * Checks if a destination phone number is an RCS recipient.
      */
     public static boolean isRcsRecipient(Context context, String destination) {
-        if (TextUtils.isEmpty(destination)) {
+        final String normalized = normalizeDestination(context, destination);
+        if (TextUtils.isEmpty(normalized)) {
             return false;
         }
-        final int cap = getCachedCapability(context, destination);
+        final int cap = getCachedCapability(context, normalized);
         if (cap == CAPABILITY_RCS_SUPPORTED) {
             return true;
         }
         if (cap == CAPABILITY_UNKNOWN) {
-            requestPlatformCapabilityDiscovery(context, destination);
+            requestPlatformCapabilityDiscovery(context, normalized);
         }
         return false;
     }
@@ -70,9 +87,11 @@ public class CapabilityDiscoveryManager {
      * Checks cached capability status for destination phone number using fast in-memory lookup.
      */
     public static int getCachedCapability(Context context, String destination) {
-        if (TextUtils.isEmpty(destination)) return CAPABILITY_UNKNOWN;
+        final String normalized = normalizeDestination(context, destination);
+        if (TextUtils.isEmpty(normalized)) return CAPABILITY_UNKNOWN;
+
         synchronized (sCapabilityCache) {
-            final Integer cached = sCapabilityCache.get(destination);
+            final Integer cached = sCapabilityCache.get(normalized);
             if (cached != null) {
                 return cached;
             }
@@ -86,8 +105,8 @@ public class CapabilityDiscoveryManager {
                 try {
                     cursor = db.query(DatabaseHelper.PARTICIPANTS_TABLE,
                             new String[] { DatabaseHelper.ParticipantColumns.RCS_CAPABILITY, DatabaseHelper.ParticipantColumns.RCS_DISCOVERY_TIMESTAMP },
-                            DatabaseHelper.ParticipantColumns.NORMALIZED_DESTINATION + "=?",
-                            new String[] { destination }, null, null, null);
+                            DatabaseHelper.ParticipantColumns.NORMALIZED_DESTINATION + "=? OR " + DatabaseHelper.ParticipantColumns.DISPLAY_DESTINATION + "=?",
+                            new String[] { normalized, destination }, null, null, null);
 
                     if (cursor != null && cursor.moveToFirst()) {
                         final int capability = cursor.getInt(0);
@@ -95,7 +114,7 @@ public class CapabilityDiscoveryManager {
 
                         if (System.currentTimeMillis() - timestamp < CAPABILITY_CACHE_VALIDITY_MS) {
                             synchronized (sCapabilityCache) {
-                                sCapabilityCache.put(destination, capability);
+                                sCapabilityCache.put(normalized, capability);
                             }
                         }
                     }
@@ -114,12 +133,22 @@ public class CapabilityDiscoveryManager {
      * Triggers asynchronous RCS capability discovery via platform Telephony RcsUceAdapter.
      */
     public static void requestPlatformCapabilityDiscovery(Context context, String destination) {
-        if (TextUtils.isEmpty(destination)) return;
+        final String normalized = normalizeDestination(context, destination);
+        if (TextUtils.isEmpty(normalized)) return;
+
+        synchronized (sLastDiscoveryMap) {
+            final Long lastDiscovery = sLastDiscoveryMap.get(normalized);
+            if (lastDiscovery != null && (System.currentTimeMillis() - lastDiscovery < MIN_DISCOVERY_INTERVAL_MS)) {
+                return; // Debounced
+            }
+            sLastDiscoveryMap.put(normalized, System.currentTimeMillis());
+        }
+
         sAsyncExecutor.execute(() -> {
             try {
                 final Object uceAdapter = RcsManager.getInstance(context).getPlatformUceAdapter();
                 if (uceAdapter != null) {
-                    final Uri contactUri = Uri.parse("tel:" + destination);
+                    final Uri contactUri = Uri.parse("tel:" + normalized);
                     final Class<?> callbackClass = Class.forName("android.telephony.ims.RcsUceAdapter$CapabilitiesCallback");
 
                     final Object callbackProxy = Proxy.newProxyInstance(
@@ -127,22 +156,25 @@ public class CapabilityDiscoveryManager {
                             new Class<?>[] { callbackClass },
                             (proxy, method, args) -> {
                                 final String methodName = method.getName();
+                                LogUtil.i(TAG, "Platform UCE proxy callback invoked: " + methodName + " for " + normalized);
+
                                 if ("onCapabilitiesReceived".equals(methodName)) {
                                     final Object capabilities = args[0];
+                                    int resultCap = CAPABILITY_RCS_SUPPORTED; // Default to supported on valid callback
                                     if (capabilities != null) {
                                         try {
                                             final Method isCapableMethod = capabilities.getClass().getMethod("isCapable", int.class);
                                             // FEATURE_TAG_CHAT_IM = 1
                                             final Boolean isCapable = (Boolean) isCapableMethod.invoke(capabilities, 1);
-                                            final int resultCap = (isCapable != null && isCapable) ? CAPABILITY_RCS_SUPPORTED : CAPABILITY_NOT_SUPPORTED;
-                                            updateCapability(context, destination, resultCap);
-                                            LogUtil.i(TAG, "Platform UCE capabilities received for " + destination + ": isCapable=" + isCapable);
-                                        } catch (Exception e) {
-                                            updateCapability(context, destination, CAPABILITY_RCS_SUPPORTED);
-                                        }
+                                            if (isCapable != null && !isCapable) {
+                                                resultCap = CAPABILITY_NOT_SUPPORTED;
+                                            }
+                                        } catch (Exception ignored) {}
                                     }
+                                    updateCapability(context, normalized, resultCap);
+                                    LogUtil.i(TAG, "Platform UCE capability resolved for " + normalized + " -> " + resultCap);
                                 } else if ("onError".equals(methodName)) {
-                                    LogUtil.w(TAG, "Platform UCE discovery error for " + destination + ": " + args[0]);
+                                    LogUtil.w(TAG, "Platform UCE discovery error for " + normalized + ": " + (args != null && args.length > 0 ? args[0] : "unknown"));
                                 }
                                 return null;
                             }
@@ -150,15 +182,15 @@ public class CapabilityDiscoveryManager {
 
                     final Method requestAvail = uceAdapter.getClass().getMethod("requestAvailability", Uri.class, Executor.class, callbackClass);
                     requestAvail.invoke(uceAdapter, contactUri, context.getMainExecutor(), callbackProxy);
-                    LogUtil.i(TAG, "Successfully invoked platform UCE requestAvailability for " + destination);
+                    LogUtil.i(TAG, "Successfully requested UCE availability for " + normalized);
                 } else {
                     final SipStackManager sipManager = RcsManager.getInstance(context).getSipStackManager();
                     if (sipManager != null) {
-                        sipManager.sendOptions(destination);
+                        sipManager.sendOptions(normalized);
                     }
                 }
             } catch (Exception e) {
-                LogUtil.w(TAG, "Platform UCE request failed for " + destination + ": " + e.getMessage());
+                LogUtil.w(TAG, "Platform UCE request failed for " + normalized + ": " + e.getMessage());
             }
         });
     }
@@ -167,9 +199,11 @@ public class CapabilityDiscoveryManager {
      * Updates capability cache in database and in-memory map.
      */
     public static void updateCapability(Context context, String destination, int capability) {
-        if (TextUtils.isEmpty(destination)) return;
+        final String normalized = normalizeDestination(context, destination);
+        if (TextUtils.isEmpty(normalized)) return;
+
         synchronized (sCapabilityCache) {
-            sCapabilityCache.put(destination, capability);
+            sCapabilityCache.put(normalized, capability);
         }
 
         sAsyncExecutor.execute(() -> {
@@ -179,13 +213,13 @@ public class CapabilityDiscoveryManager {
                 values.put(DatabaseHelper.ParticipantColumns.RCS_CAPABILITY, capability);
                 values.put(DatabaseHelper.ParticipantColumns.RCS_DISCOVERY_TIMESTAMP, System.currentTimeMillis());
 
-                db.update(DatabaseHelper.PARTICIPANTS_TABLE, values,
-                        DatabaseHelper.ParticipantColumns.NORMALIZED_DESTINATION + "=?",
-                        new String[] { destination });
+                final int updatedRows = db.update(DatabaseHelper.PARTICIPANTS_TABLE, values,
+                        DatabaseHelper.ParticipantColumns.NORMALIZED_DESTINATION + "=? OR " + DatabaseHelper.ParticipantColumns.DISPLAY_DESTINATION + "=?",
+                        new String[] { normalized, destination });
 
-                LogUtil.i(TAG, "Updated RCS capability for " + destination + " to: " + capability);
+                LogUtil.i(TAG, "Updated RCS capability in database for " + normalized + " to: " + capability + " (rows updated=" + updatedRows + ")");
             } catch (Exception e) {
-                LogUtil.e(TAG, "Error updating capability cache", e);
+                LogUtil.e(TAG, "Error updating capability cache in DB", e);
             }
         });
     }
