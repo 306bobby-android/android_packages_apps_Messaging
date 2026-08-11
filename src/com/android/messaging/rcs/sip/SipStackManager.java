@@ -102,7 +102,7 @@ public class SipStackManager {
                 if (mUseUdp) {
                     LogUtil.i(TAG, "Initializing SIPoUDP DatagramSocket to " + mTargetAddress.getHostAddress());
                     mUdpSocket = new DatagramSocket();
-                    bindSocketToCellularOrIms(mUdpSocket);
+                    bindSocketToActiveNetwork(mUdpSocket);
                     mUdpSocket.setSoTimeout(10000);
                     mIsConnected.set(true);
                     startUdpReaderThread();
@@ -114,7 +114,7 @@ public class SipStackManager {
                     } else {
                         mTcpSocket = new Socket();
                     }
-                    bindSocketToCellularOrIms(mTcpSocket);
+                    bindSocketToActiveNetwork(mTcpSocket);
                     mTcpSocket.connect(new InetSocketAddress(mTargetAddress, mTargetPort), 10000);
                     mInputStream = mTcpSocket.getInputStream();
                     mOutputStream = mTcpSocket.getOutputStream();
@@ -142,7 +142,7 @@ public class SipStackManager {
                 }
                 mUseUdp = false;
                 mTcpSocket = new Socket();
-                bindSocketToCellularOrIms(mTcpSocket);
+                bindSocketToActiveNetwork(mTcpSocket);
                 mTcpSocket.connect(new InetSocketAddress(mTargetAddress, mTargetPort), 10000);
                 mInputStream = mTcpSocket.getInputStream();
                 mOutputStream = mTcpSocket.getOutputStream();
@@ -156,45 +156,31 @@ public class SipStackManager {
         }).start();
     }
 
-    private void bindSocketToCellularOrIms(DatagramSocket socket) {
+    private void bindSocketToActiveNetwork(DatagramSocket socket) {
         try {
             final ConnectivityManager cm = (ConnectivityManager) mContext.getSystemService(Context.CONNECTIVITY_SERVICE);
             if (cm == null) return;
-            for (Network network : cm.getAllNetworks()) {
-                final NetworkCapabilities caps = cm.getNetworkCapabilities(network);
-                if (caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_IMS)) {
-                    try {
-                        network.bindSocket(socket);
-                        LogUtil.i(TAG, "Bound DatagramSocket to IMS network interface: " + network);
-                        return;
-                    } catch (Exception bindEx) {
-                        LogUtil.w(TAG, "Could not bind UDP socket to network " + network + ": " + bindEx.getMessage());
-                    }
-                }
+            final Network activeNetwork = cm.getActiveNetwork();
+            if (activeNetwork != null) {
+                activeNetwork.bindSocket(socket);
+                LogUtil.i(TAG, "Bound DatagramSocket to active network interface: " + activeNetwork);
             }
         } catch (Exception e) {
-            LogUtil.w(TAG, "Failed to bind UDP socket to IMS network", e);
+            LogUtil.w(TAG, "Failed to bind UDP socket to active network: " + e.getMessage());
         }
     }
 
-    private void bindSocketToCellularOrIms(Socket socket) {
+    private void bindSocketToActiveNetwork(Socket socket) {
         try {
             final ConnectivityManager cm = (ConnectivityManager) mContext.getSystemService(Context.CONNECTIVITY_SERVICE);
             if (cm == null) return;
-            for (Network network : cm.getAllNetworks()) {
-                final NetworkCapabilities caps = cm.getNetworkCapabilities(network);
-                if (caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_IMS)) {
-                    try {
-                        network.bindSocket(socket);
-                        LogUtil.i(TAG, "Bound TCP socket to IMS network interface: " + network);
-                        return;
-                    } catch (Exception bindEx) {
-                        LogUtil.w(TAG, "Could not bind TCP socket to network " + network + ": " + bindEx.getMessage());
-                    }
-                }
+            final Network activeNetwork = cm.getActiveNetwork();
+            if (activeNetwork != null) {
+                activeNetwork.bindSocket(socket);
+                LogUtil.i(TAG, "Bound TCP socket to active network interface: " + activeNetwork);
             }
         } catch (Exception e) {
-            LogUtil.w(TAG, "Failed to bind TCP socket to IMS network", e);
+            LogUtil.w(TAG, "Failed to bind TCP socket to active network: " + e.getMessage());
         }
     }
 
