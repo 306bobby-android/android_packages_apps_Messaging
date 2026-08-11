@@ -22,6 +22,8 @@ import android.database.Cursor;
 import com.android.messaging.R;
 import com.android.messaging.util.Assert;
 
+public class PeopleOptionsItemData {
+    // Identification for each setting that's surfaced to the UI layer.
     public static final int SETTING_NOTIFICATION = 0;
     public static final int SETTING_BLOCKED = 1;
     public static final int SETTING_READ_RECEIPTS = 2;
