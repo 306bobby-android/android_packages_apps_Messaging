@@ -374,10 +374,18 @@ public class SendMessageAction extends Action implements Parcelable {
             }
         } else if (message.getSmsMessageUri() != null) {
             if (messageBox != Mms.MESSAGE_BOX_ALL) {
-                if (!MmsUtils.updateMmsMessageSendingStatus(context, message.getSmsMessageUri(),
-                        messageBox, message.getReceivedTimeStamp())) {
-                    message.markMessageFailed(message.getSentTimeStamp());
-                    updatedTelephony = false;
+                if (isSms || isRcs) {
+                    if (!MmsUtils.updateSmsMessageSendingStatus(context, message.getSmsMessageUri(),
+                            type, message.getReceivedTimeStamp())) {
+                        message.markMessageFailed(message.getSentTimeStamp());
+                        updatedTelephony = false;
+                    }
+                } else {
+                    if (!MmsUtils.updateMmsMessageSendingStatus(context, message.getSmsMessageUri(),
+                            messageBox, message.getReceivedTimeStamp())) {
+                        message.markMessageFailed(message.getSentTimeStamp());
+                        updatedTelephony = false;
+                    }
                 }
             }
         }
