@@ -23,7 +23,6 @@ import android.telephony.SubscriptionManager;
 
 import com.android.messaging.util.LogUtil;
 
-import java.lang.reflect.Method;
 
 /**
  * Switches platform capability discovery from presence to SIP OPTIONS.
@@ -116,27 +115,26 @@ public final class UceMechanismConfigurator {
     }
 
     /**
-     * Calls {@code CarrierConfigManager#overrideConfig}. The persistent three-argument form is
-     * {@code @hide} and the two-argument form is {@code @SystemApi}, so both are reached by
-     * reflection; the persistent one is preferred so the override survives a config reload.
+     * Applies the override.
+     *
+     * <p>Only the two-argument form is used. The persistent three-argument variant is
+     * {@code @hide}, so reflection at it is refused by hidden-API enforcement:
+     * "Accessing hidden method ... overrideConfig(ILandroid/os/PersistableBundle;Z)V ... denied".
+     * The two-argument form does not survive a carrier config reload, which is why this is
+     * re-applied whenever RCS initialises.
      */
     private static boolean overrideConfig(CarrierConfigManager ccm, int subId,
             PersistableBundle override) {
         try {
-            final Method persistent = CarrierConfigManager.class.getMethod("overrideConfig",
-                    int.class, PersistableBundle.class, boolean.class);
-            persistent.invoke(ccm, subId, override, true);
+            ccm.overrideConfig(subId, override);
             return true;
-        } catch (Throwable t) {
-            LogUtil.i(TAG, "Persistent overrideConfig unavailable (" + t + "); trying two-arg form");
-        }
-        try {
-            final Method transient2 = CarrierConfigManager.class.getMethod("overrideConfig",
-                    int.class, PersistableBundle.class);
-            transient2.invoke(ccm, subId, override);
-            return true;
-        } catch (Throwable t) {
-            LogUtil.e(TAG, "overrideConfig failed; MODIFY_PHONE_STATE may not be granted: " + t);
+        } catch (SecurityException e) {
+            LogUtil.e(TAG, "overrideConfig denied — MODIFY_PHONE_STATE not granted. The privapp "
+                    + "allowlist ships in /product/etc/permissions, so it needs a ROM flash "
+                    + "rather than an app update.", e);
+            return false;
+        } catch (Exception e) {
+            LogUtil.e(TAG, "overrideConfig failed", e);
             return false;
         }
     }
