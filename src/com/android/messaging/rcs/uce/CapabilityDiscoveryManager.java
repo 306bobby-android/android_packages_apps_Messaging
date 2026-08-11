@@ -62,7 +62,7 @@ public class CapabilityDiscoveryManager {
         if (digits.startsWith("+")) return digits;
         if (digits.length() == 10) return "+1" + digits;
         if (digits.length() == 11 && digits.startsWith("1")) return "+" + digits;
-        return PhoneUtils.get(context).getCanonicalBySimLocale(destination);
+        return PhoneUtils.get(com.android.messaging.datamodel.data.ParticipantData.DEFAULT_SELF_SUB_ID).getCanonicalBySimLocale(destination);
     }
 
     /**
