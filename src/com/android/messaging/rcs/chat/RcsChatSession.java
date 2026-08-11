@@ -345,7 +345,13 @@ public class RcsChatSession {
             return;
         }
 
+        final SipConfigSnapshot config = mTransport.getConfig();
+        final java.net.InetAddress localAddr =
+                (config != null && config.localAddress != null)
+                        ? config.localAddress.getAddress() : null;
+
         mMsrp = new MsrpSession(mContext, mLocalMsrpPath, mRemoteMsrpPath, host, port, weAreActive,
+                localAddr,
                 new MsrpSession.MsrpListener() {
                     @Override
                     public void onSessionOpened() {

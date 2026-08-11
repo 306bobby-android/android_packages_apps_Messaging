@@ -19,12 +19,15 @@ package com.android.messaging.rcs.msrp;
 import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.Network;
+import android.net.LinkAddress;
+import android.net.LinkProperties;
 import android.net.NetworkCapabilities;
 
 import com.android.messaging.util.LogUtil;
 
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -66,6 +69,15 @@ public class MsrpSession {
     private final int mRemotePort;
     private final boolean mActive;
     private final MsrpListener mListener;
+    /**
+     * The address the SIP delegate is registered from.
+     *
+     * <p>A dual-SIM device has one IMS PDN per subscription, so "the IMS network" is ambiguous.
+     * Media has to leave from the same PDN the session was signalled on; the other one has no
+     * route to the peer's MSRP endpoint and the connection simply times out. This address
+     * identifies which of them is ours.
+     */
+    private final InetAddress mLocalAddress;
 
     private Socket mSocket;
     private ServerSocket mServerSocket;
@@ -74,8 +86,9 @@ public class MsrpSession {
     private final AtomicBoolean mActiveFlag = new AtomicBoolean(false);
 
     public MsrpSession(Context context, String localPath, String remotePath, String remoteHost,
-            int remotePort, boolean active, MsrpListener listener) {
+            int remotePort, boolean active, InetAddress localAddress, MsrpListener listener) {
         mContext = context.getApplicationContext();
+        mLocalAddress = localAddress;
         mLocalPath = localPath;
         mRemotePath = remotePath;
         mRemoteHost = remoteHost;
@@ -124,7 +137,16 @@ public class MsrpSession {
         final Network ims = findImsNetwork();
         if (ims != null) {
             ims.bindSocket(mSocket);
-            LogUtil.i(TAG, "MSRP socket bound to IMS network");
+            // Pin the source address too, so the socket cannot pick a different address on a
+            // PDN that happens to carry more than one.
+            if (mLocalAddress != null) {
+                try {
+                    mSocket.bind(new InetSocketAddress(mLocalAddress, 0));
+                } catch (Exception e) {
+                    LogUtil.w(TAG, "Could not pin MSRP source address " + mLocalAddress + ": " + e);
+                }
+            }
+            LogUtil.i(TAG, "MSRP socket bound to IMS network, source=" + mLocalAddress);
         } else {
             LogUtil.w(TAG, "IMS network unavailable to this app; MSRP will use the default "
                     + "network. This usually fails on carrier RCS. Grant "
@@ -142,22 +164,47 @@ public class MsrpSession {
     }
 
     /**
-     * Returns the IMS network if this app is permitted to see it.
+     * Returns the IMS network this session was signalled on.
      *
-     * <p>The IMS network lacks {@code NOT_RESTRICTED}, so an app without
-     * {@code CONNECTIVITY_USE_RESTRICTED_NETWORKS} will simply not find it here.
+     * <p>Selection is by local address rather than by taking the first IMS network found: on a
+     * dual-SIM device each subscription has its own IMS PDN, and the other one cannot reach our
+     * peer. Falling back to the first IMS network would connect from the wrong source address and
+     * time out.
+     *
+     * <p>The IMS network also lacks {@code NOT_RESTRICTED}, so an app without
+     * {@code CONNECTIVITY_USE_RESTRICTED_NETWORKS} will not find it here at all.
      */
     private Network findImsNetwork() {
         try {
             final ConnectivityManager cm =
                     (ConnectivityManager) mContext.getSystemService(Context.CONNECTIVITY_SERVICE);
             if (cm == null) return null;
+
+            Network firstImsNetwork = null;
             for (Network network : cm.getAllNetworks()) {
                 final NetworkCapabilities caps = cm.getNetworkCapabilities(network);
-                if (caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_IMS)) {
-                    return network;
+                if (caps == null
+                        || !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_IMS)) {
+                    continue;
+                }
+                if (firstImsNetwork == null) firstImsNetwork = network;
+                if (mLocalAddress == null) continue;
+
+                final LinkProperties lp = cm.getLinkProperties(network);
+                if (lp == null) continue;
+                for (LinkAddress la : lp.getLinkAddresses()) {
+                    if (mLocalAddress.equals(la.getAddress())) {
+                        LogUtil.i(TAG, "Matched IMS network on " + lp.getInterfaceName()
+                                + " for local address " + mLocalAddress);
+                        return network;
+                    }
                 }
             }
+            if (firstImsNetwork != null) {
+                LogUtil.w(TAG, "No IMS network carries " + mLocalAddress
+                        + "; falling back to the first one, which may not reach the peer");
+            }
+            return firstImsNetwork;
         } catch (Exception e) {
             LogUtil.w(TAG, "IMS network lookup failed: " + e);
         }
