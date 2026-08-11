@@ -198,10 +198,12 @@ public class PeopleAndOptionsFragment extends Fragment
                                 android.widget.Toast.makeText(getContext(), "Triggered force UCE capability refresh for " + dest, android.widget.Toast.LENGTH_SHORT).show();
                             } else if (which == 1) {
                                 com.android.messaging.rcs.uce.CapabilityDiscoveryManager.updateCapability(getContext(), dest, com.android.messaging.rcs.uce.CapabilityDiscoveryManager.CAPABILITY_RCS_SUPPORTED);
+                                if (mAdapter != null) mAdapter.notifyDataSetChanged();
                                 android.widget.Toast.makeText(getContext(), "Force enabled RCS for " + dest, android.widget.Toast.LENGTH_SHORT).show();
                             } else if (which == 2) {
                                 com.android.messaging.rcs.uce.CapabilityDiscoveryManager.updateCapability(getContext(), dest, com.android.messaging.rcs.uce.CapabilityDiscoveryManager.CAPABILITY_UNKNOWN);
                                 com.android.messaging.rcs.uce.CapabilityDiscoveryManager.forceRefreshCapability(getContext(), dest);
+                                if (mAdapter != null) mAdapter.notifyDataSetChanged();
                                 android.widget.Toast.makeText(getContext(), "Reset capability discovery for " + dest, android.widget.Toast.LENGTH_SHORT).show();
                             }
                         })

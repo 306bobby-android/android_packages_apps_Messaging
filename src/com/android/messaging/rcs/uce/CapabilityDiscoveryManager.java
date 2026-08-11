@@ -146,6 +146,12 @@ public class CapabilityDiscoveryManager {
             sCapabilityCache.remove(normalized);
         }
         requestPlatformCapabilityDiscovery(context, normalized);
+
+        // Also send SIP OPTIONS query directly via SipStackManager as fallback
+        final SipStackManager sipManager = RcsManager.getInstance(context).getSipStackManager();
+        if (sipManager != null) {
+            sipManager.sendOptions(normalized);
+        }
     }
     public static void requestBatchCapabilityDiscovery(Context context, List<String> destinations) {
         if (destinations == null || destinations.isEmpty()) return;
