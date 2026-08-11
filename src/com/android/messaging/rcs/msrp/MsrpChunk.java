@@ -96,14 +96,19 @@ public final class MsrpChunk {
         return out.toByteArray();
     }
 
-    /** Builds an empty SEND, used as a keep-alive / session probe. */
+    /**
+     * Builds the bodiless SEND that binds an MSRP session (RFC 4975 s7.1).
+     *
+     * <p>A chunk with no body has no blank line: the empty line exists to separate headers from
+     * content, and emitting one with nothing after it draws {@code 400 Bad Request}. The end-line
+     * follows the last header directly.
+     */
     public static byte[] buildEmptySend(String transactionId, String toPath, String fromPath) {
         final StringBuilder head = new StringBuilder();
         head.append("MSRP ").append(transactionId).append(" SEND\r\n");
         head.append("To-Path: ").append(toPath).append("\r\n");
         head.append("From-Path: ").append(fromPath).append("\r\n");
         head.append("Message-ID: ").append(transactionId).append("\r\n");
-        head.append("\r\n");
         final ByteArrayOutputStream out = new ByteArrayOutputStream();
         writeAscii(out, head.toString());
         writeAscii(out, "-------" + transactionId + FLAG_COMPLETE + "\r\n");
