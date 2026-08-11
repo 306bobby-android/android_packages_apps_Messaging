@@ -180,9 +180,19 @@ public class CapabilityDiscoveryManager {
                             }
                     );
 
-                    final Method requestAvail = uceAdapter.getClass().getMethod("requestAvailability", Uri.class, Executor.class, callbackClass);
-                    requestAvail.invoke(uceAdapter, contactUri, context.getMainExecutor(), callbackProxy);
-                    LogUtil.i(TAG, "Successfully requested UCE availability for " + normalized);
+                    try {
+                        final Method reqAvail = uceAdapter.getClass().getMethod("requestAvailability", Uri.class, Executor.class, callbackClass);
+                        reqAvail.invoke(uceAdapter, contactUri, context.getMainExecutor(), callbackProxy);
+                        LogUtil.i(TAG, "Successfully requested UCE requestAvailability for " + normalized);
+                    } catch (Exception e) {
+                        try {
+                            final Method reqCaps = uceAdapter.getClass().getMethod("requestCapabilities", java.util.List.class, Executor.class, callbackClass);
+                            reqCaps.invoke(uceAdapter, java.util.Collections.singletonList(contactUri), context.getMainExecutor(), callbackProxy);
+                            LogUtil.i(TAG, "Successfully requested UCE requestCapabilities for " + normalized);
+                        } catch (Exception ex) {
+                            LogUtil.w(TAG, "Platform UCE method invocation failed for " + normalized + ": " + ex.getMessage());
+                        }
+                    }
                 } else {
                     final SipStackManager sipManager = RcsManager.getInstance(context).getSipStackManager();
                     if (sipManager != null) {
