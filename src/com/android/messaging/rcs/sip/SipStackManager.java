@@ -20,6 +20,7 @@ import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.telephony.TelephonyManager;
 
 import com.android.messaging.rcs.acs.AcsConfig;
 import com.android.messaging.util.LogUtil;
@@ -97,6 +98,7 @@ public class SipStackManager {
                 if (mUseUdp) {
                     LogUtil.i(TAG, "Initializing SIPoUDP DatagramSocket to " + mTargetAddress.getHostAddress());
                     mUdpSocket = new DatagramSocket();
+                    mUdpSocket.connect(mTargetAddress, mTargetPort);
                     mUdpSocket.setSoTimeout(15000);
                     mIsConnected.set(true);
                     startUdpReaderThread();
@@ -162,31 +164,58 @@ public class SipStackManager {
             int localPort = 5060;
 
             if (mUseUdp && mUdpSocket != null) {
-                localIp = mUdpSocket.getLocalAddress() != null ? mUdpSocket.getLocalAddress().getHostAddress() : "127.0.0.1";
+                if (mUdpSocket.getLocalAddress() != null) {
+                    localIp = mUdpSocket.getLocalAddress().getHostAddress();
+                }
                 localPort = mUdpSocket.getLocalPort();
             } else if (mTcpSocket != null) {
-                localIp = mTcpSocket.getLocalAddress() != null ? mTcpSocket.getLocalAddress().getHostAddress() : "127.0.0.1";
+                if (mTcpSocket.getLocalAddress() != null) {
+                    localIp = mTcpSocket.getLocalAddress().getHostAddress();
+                }
                 localPort = mTcpSocket.getLocalPort();
+            }
+
+            // Format IPv6 address string with brackets if applicable
+            final String formattedLocalIp = (localIp != null && localIp.contains(":")) ? "[" + localIp + "]" : localIp;
+
+            // Determine Public User Identity (IMPU)
+            String user = mConfig.getPublicUserIdentity();
+            if (user == null || user.isEmpty() || "AKA".equalsIgnoreCase(user)) {
+                try {
+                    final TelephonyManager tm = (TelephonyManager) mContext.getSystemService(Context.TELEPHONY_SERVICE);
+                    if (tm != null) {
+                        final String num = tm.getLine1Number();
+                        if (num != null && !num.isEmpty()) {
+                            user = num.startsWith("+") ? num : "+" + num;
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+            if (user == null || user.isEmpty() || "AKA".equalsIgnoreCase(user)) {
+                user = "+19876543210"; // Fallback subscriber ID
             }
 
             final String transportStr = mUseUdp ? "UDP" : (mTargetPort == 5061 ? "TLS" : "TCP");
 
             final StringBuilder sb = new StringBuilder();
             sb.append("REGISTER ").append(sipUri).append(" SIP/2.0\r\n");
-            sb.append("Via: SIP/2.0/").append(transportStr).append(" ").append(localIp).append(":").append(localPort).append(";branch=").append(branch).append("\r\n");
-            sb.append("From: <sip:").append(mConfig.getDigestUsername()).append("@").append(mConfig.getSipDomain())
+            sb.append("Via: SIP/2.0/").append(transportStr).append(" ").append(formattedLocalIp).append(":").append(localPort).append(";branch=").append(branch).append("\r\n");
+            sb.append("From: <sip:").append(user).append("@").append(mConfig.getSipDomain())
                     .append(">;tag=").append(UUID.randomUUID().toString().substring(0, 8)).append("\r\n");
-            sb.append("To: <sip:").append(mConfig.getDigestUsername()).append("@").append(mConfig.getSipDomain()).append(">\r\n");
+            sb.append("To: <sip:").append(user).append("@").append(mConfig.getSipDomain()).append(">\r\n");
             sb.append("Call-ID: ").append(callId).append("\r\n");
             sb.append("CSeq: ").append(mCSeq++).append(" REGISTER\r\n");
-            sb.append("Contact: <sip:").append(mConfig.getDigestUsername()).append("@")
-                    .append(localIp).append(">;+g.3gpp.iari-ref=\"urn%3Aurn-7%3A3gpp-application.ims.iari.rcse.dp\"\r\n");
+            sb.append("Contact: <sip:").append(user).append("@")
+                    .append(formattedLocalIp).append(":").append(localPort).append(">;+g.3gpp.iari-ref=\"urn%3Aurn-7%3A3gpp-application.ims.iari.rcse.dp\"\r\n");
             sb.append("Expires: ").append(mConfig.getRegExpireSeconds()).append("\r\n");
+
+            final String usernameForAuth = (mConfig.getDigestUsername() != null && !"AKA".equalsIgnoreCase(mConfig.getDigestUsername()))
+                    ? mConfig.getDigestUsername() : user;
 
             if (nonce != null && realm != null) {
                 final String response = SipAuthHelper.calculateDigestResponse(
-                        mConfig.getDigestUsername(), mConfig.getDigestPassword(), realm, "REGISTER", sipUri, nonce, null, null);
-                sb.append("Authorization: Digest username=\"").append(mConfig.getDigestUsername()).append("\", ")
+                        usernameForAuth, mConfig.getDigestPassword(), realm, "REGISTER", sipUri, nonce, null, null);
+                sb.append("Authorization: Digest username=\"").append(usernameForAuth).append("\", ")
                         .append("realm=\"").append(realm).append("\", ")
                         .append("nonce=\"").append(nonce).append("\", ")
                         .append("uri=\"").append(sipUri).append("\", ")

@@ -24,6 +24,7 @@ public class AcsConfig {
     private int mPCscfPort = 5060;
     private String mSipDomain;
     private String mSipRealm;
+    private String mPublicUserIdentity;
     private String mDigestUsername;
     private String mDigestPassword;
     private String mMsrpRelayHost;
@@ -63,6 +64,14 @@ public class AcsConfig {
 
     public void setSipRealm(String sipRealm) {
         mSipRealm = sipRealm;
+    }
+
+    public String getPublicUserIdentity() {
+        return mPublicUserIdentity;
+    }
+
+    public void setPublicUserIdentity(String publicUserIdentity) {
+        mPublicUserIdentity = publicUserIdentity;
     }
 
     public String getDigestUsername() {

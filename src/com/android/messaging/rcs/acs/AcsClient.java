@@ -325,6 +325,11 @@ public class AcsClient {
         } else if (nameLower.contains("domain") || nameLower.contains("realm")) {
             if (config.getSipDomain() == null) config.setSipDomain(value);
             if (config.getSipRealm() == null) config.setSipRealm(value);
+        } else if (nameLower.contains("enduserconfreqid") || nameLower.contains("public_user_identity") || nameLower.contains("impu")) {
+            String impu = value;
+            if (impu.startsWith("sip:")) impu = impu.substring(4);
+            if (impu.contains("@")) impu = impu.substring(0, impu.indexOf("@"));
+            config.setPublicUserIdentity(impu);
         } else if (nameLower.contains("username") || nameLower.contains("auth")) {
             if (config.getDigestUsername() == null) config.setDigestUsername(value);
         } else if (nameLower.contains("password") || nameLower.contains("secret")) {
