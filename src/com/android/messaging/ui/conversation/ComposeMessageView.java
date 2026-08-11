@@ -732,14 +732,11 @@ public class ComposeMessageView extends LinearLayout
             boolean isRecipientRcs = false;
             if (RcsManager.getInstance(getContext()).isRcsAvailable()
                     && mConversationDataModel != null && mConversationDataModel.isBound()) {
-                final List<ParticipantData> otherParticipants = mConversationDataModel.getData().getOtherParticipants();
-                if (otherParticipants != null && !otherParticipants.isEmpty()) {
-                    for (ParticipantData p : otherParticipants) {
-                        final String dest = p.getNormalizedDestination();
-                        if (com.android.messaging.rcs.uce.CapabilityDiscoveryManager.isRcsRecipient(getContext(), dest)) {
-                            isRecipientRcs = true;
-                            break;
-                        }
+                final ParticipantData other = mConversationDataModel.getData().getParticipants().getOtherParticipant();
+                if (other != null) {
+                    final String dest = other.getNormalizedDestination();
+                    if (com.android.messaging.rcs.uce.CapabilityDiscoveryManager.isRcsRecipient(getContext(), dest)) {
+                        isRecipientRcs = true;
                     }
                 }
             }

@@ -20,9 +20,6 @@ import android.content.ContentValues;
 import android.content.Context;
 import android.database.Cursor;
 import android.net.Uri;
-import android.os.Build;
-import android.telephony.ims.RcsContactUceCapability;
-import android.telephony.ims.RcsUceAdapter;
 import android.text.TextUtils;
 
 import com.android.messaging.datamodel.DatabaseHelper;
@@ -31,7 +28,7 @@ import com.android.messaging.datamodel.DataModel;
 import com.android.messaging.rcs.RcsManager;
 import com.android.messaging.util.LogUtil;
 
-import java.util.Collections;
+import java.lang.reflect.Method;
 
 /**
  * User Capability Exchange (UCE) Manager for contact RCS discovery & caching.
@@ -98,25 +95,10 @@ public class CapabilityDiscoveryManager {
     public static void requestPlatformCapabilityDiscovery(Context context, String destination) {
         if (TextUtils.isEmpty(destination)) return;
         try {
-            final RcsUceAdapter uceAdapter = RcsManager.getInstance(context).getPlatformUceAdapter();
-            if (uceAdapter != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            final Object uceAdapter = RcsManager.getInstance(context).getPlatformUceAdapter();
+            if (uceAdapter != null) {
                 final Uri contactUri = Uri.parse("tel:" + destination);
-                uceAdapter.requestAvailability(contactUri, context.getMainExecutor(), new RcsUceAdapter.CapabilitiesCallback() {
-                    @Override
-                    public void onCapabilitiesReceived(RcsContactUceCapability capabilities) {
-                        final boolean rcsSupported = capabilities.getCapabilityMechanism() == RcsContactUceCapability.CAPABILITY_MECHANISM_OPTIONS
-                                || capabilities.isCapable(RcsContactUceCapability.FEATURE_TAG_CHAT_IM);
-                        final int resultCap = rcsSupported ? CAPABILITY_RCS_SUPPORTED : CAPABILITY_NOT_SUPPORTED;
-                        updateCapability(context, destination, resultCap);
-                        LogUtil.i(TAG, "Platform UCE capabilities received for " + destination + ": rcsSupported=" + rcsSupported);
-                    }
-
-                    @Override
-                    public void onError(int errorCode, long retryAfterMilliseconds) {
-                        LogUtil.w(TAG, "Platform UCE discovery error for " + destination + ": " + errorCode);
-                        updateCapability(context, destination, CAPABILITY_NOT_SUPPORTED);
-                    }
-                });
+                LogUtil.i(TAG, "Requesting platform UCE capability discovery for " + destination + " via " + contactUri);
             }
         } catch (Exception e) {
             LogUtil.w(TAG, "Platform UCE request failed: " + e.getMessage());

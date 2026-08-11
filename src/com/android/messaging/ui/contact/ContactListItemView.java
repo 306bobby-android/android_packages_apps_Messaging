@@ -167,7 +167,7 @@ public class ContactListItemView extends LinearLayout implements OnClickListener
             mAlphabetHeaderTextView.setVisibility(GONE);
         }
 
-        final String destination = mData.getDestination();
+        final String destination = (mData.getDestination() != null) ? mData.getDestination().toString() : "";
         final boolean isRcs = com.android.messaging.rcs.uce.CapabilityDiscoveryManager.isRcsRecipient(getContext(), destination);
         final float alpha = isRcs ? 1.0f : 0.65f;
         mContactNameTextView.setAlpha(alpha);
