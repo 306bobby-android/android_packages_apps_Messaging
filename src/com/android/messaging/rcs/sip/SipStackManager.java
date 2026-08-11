@@ -26,6 +26,8 @@ import com.android.messaging.util.LogUtil;
 
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -36,15 +38,25 @@ import javax.net.ssl.SSLSocketFactory;
 
 /**
  * Socket-level SIP Stack Manager for P-CSCF registration, signaling, and message transport.
+ * Supports both UDP (SIPoUDP) and TCP/TLS transports.
  */
 public class SipStackManager {
     private static final String TAG = "SipStackManager";
 
     private final Context mContext;
     private final AcsConfig mConfig;
-    private Socket mSocket;
+    private InetAddress mTargetAddress;
+    private int mTargetPort;
+
+    // UDP Transport
+    private DatagramSocket mUdpSocket;
+
+    // TCP/TLS Transport
+    private Socket mTcpSocket;
     private InputStream mInputStream;
     private OutputStream mOutputStream;
+
+    private boolean mUseUdp = true; // Default for carrier SIPoUDP
     private final AtomicBoolean mIsConnected = new AtomicBoolean(false);
     private long mCSeq = 1;
 
@@ -60,8 +72,8 @@ public class SipStackManager {
         new Thread(() -> {
             try {
                 final String host = mConfig.getPCscfAddress();
-                final int port = mConfig.getPCscfPort();
-                LogUtil.i(TAG, "Resolving P-CSCF address: " + host + ":" + port);
+                mTargetPort = mConfig.getPCscfPort();
+                LogUtil.i(TAG, "Resolving P-CSCF address: " + host + ":" + mTargetPort);
 
                 InetAddress[] addresses = null;
                 try {
@@ -77,28 +89,33 @@ public class SipStackManager {
                     return;
                 }
 
-                final InetAddress targetAddress = addresses[0];
-                LogUtil.i(TAG, "Connecting socket to target IP: " + targetAddress.getHostAddress() + ":" + port);
+                mTargetAddress = addresses[0];
+                LogUtil.i(TAG, "Target P-CSCF IP: " + mTargetAddress.getHostAddress() + ":" + mTargetPort);
 
-                if (port == 5061) {
-                    // TLS Port 5061
-                    final SSLSocketFactory factory = (SSLSocketFactory) SSLSocketFactory.getDefault();
-                    mSocket = factory.createSocket();
-                    mSocket.connect(new InetSocketAddress(targetAddress, port), 10000);
+                mUseUdp = (mTargetPort == 5060); // Use UDP for port 5060 (SIPoUDP)
+
+                if (mUseUdp) {
+                    LogUtil.i(TAG, "Initializing SIPoUDP DatagramSocket to " + mTargetAddress.getHostAddress());
+                    mUdpSocket = new DatagramSocket();
+                    mUdpSocket.setSoTimeout(15000);
+                    mIsConnected.set(true);
+                    startUdpReaderThread();
                 } else {
-                    // Standard TCP/SIP Port 5060
-                    mSocket = new Socket();
-                    mSocket.connect(new InetSocketAddress(targetAddress, port), 10000);
+                    LogUtil.i(TAG, "Initializing SIP TCP/TLS Socket to " + mTargetAddress.getHostAddress());
+                    if (mTargetPort == 5061) {
+                        final SSLSocketFactory factory = (SSLSocketFactory) SSLSocketFactory.getDefault();
+                        mTcpSocket = factory.createSocket();
+                    } else {
+                        mTcpSocket = new Socket();
+                    }
+                    mTcpSocket.connect(new InetSocketAddress(mTargetAddress, mTargetPort), 10000);
+                    mInputStream = mTcpSocket.getInputStream();
+                    mOutputStream = mTcpSocket.getOutputStream();
+                    mIsConnected.set(true);
+                    startTcpReaderThread();
                 }
 
-                mInputStream = mSocket.getInputStream();
-                mOutputStream = mSocket.getOutputStream();
-                mIsConnected.set(true);
-
                 LogUtil.i(TAG, "Socket connected successfully to P-CSCF!");
-
-                // Start listening thread
-                startIncomingReaderThread();
 
                 // Send initial REGISTER request
                 sendRegister(null, null);
@@ -132,7 +149,7 @@ public class SipStackManager {
      */
     public void sendRegister(String nonce, String realm) {
         try {
-            if (mSocket == null || !mSocket.isConnected()) {
+            if (!mIsConnected.get()) {
                 LogUtil.e(TAG, "Cannot send REGISTER: Socket is not connected");
                 return;
             }
@@ -140,12 +157,23 @@ public class SipStackManager {
             final String callId = UUID.randomUUID().toString();
             final String branch = "z9hG4bK" + UUID.randomUUID().toString().replace("-", "");
             final String sipUri = "sip:" + mConfig.getSipDomain();
-            final String localIp = mSocket.getLocalAddress() != null ? mSocket.getLocalAddress().getHostAddress() : "127.0.0.1";
-            final int localPort = mSocket.getLocalPort();
+
+            String localIp = "127.0.0.1";
+            int localPort = 5060;
+
+            if (mUseUdp && mUdpSocket != null) {
+                localIp = mUdpSocket.getLocalAddress() != null ? mUdpSocket.getLocalAddress().getHostAddress() : "127.0.0.1";
+                localPort = mUdpSocket.getLocalPort();
+            } else if (mTcpSocket != null) {
+                localIp = mTcpSocket.getLocalAddress() != null ? mTcpSocket.getLocalAddress().getHostAddress() : "127.0.0.1";
+                localPort = mTcpSocket.getLocalPort();
+            }
+
+            final String transportStr = mUseUdp ? "UDP" : (mTargetPort == 5061 ? "TLS" : "TCP");
 
             final StringBuilder sb = new StringBuilder();
             sb.append("REGISTER ").append(sipUri).append(" SIP/2.0\r\n");
-            sb.append("Via: SIP/2.0/TCP ").append(localIp).append(":").append(localPort).append(";branch=").append(branch).append("\r\n");
+            sb.append("Via: SIP/2.0/").append(transportStr).append(" ").append(localIp).append(":").append(localPort).append(";branch=").append(branch).append("\r\n");
             sb.append("From: <sip:").append(mConfig.getDigestUsername()).append("@").append(mConfig.getSipDomain())
                     .append(">;tag=").append(UUID.randomUUID().toString().substring(0, 8)).append("\r\n");
             sb.append("To: <sip:").append(mConfig.getDigestUsername()).append("@").append(mConfig.getSipDomain()).append(">\r\n");
@@ -168,26 +196,52 @@ public class SipStackManager {
             sb.append("Content-Length: 0\r\n\r\n");
 
             final byte[] bytes = sb.toString().getBytes("UTF-8");
-            mOutputStream.write(bytes);
-            mOutputStream.flush();
+
+            if (mUseUdp && mUdpSocket != null) {
+                final DatagramPacket packet = new DatagramPacket(bytes, bytes.length, mTargetAddress, mTargetPort);
+                mUdpSocket.send(packet);
+            } else if (mOutputStream != null) {
+                mOutputStream.write(bytes);
+                mOutputStream.flush();
+            }
+
             LogUtil.i(TAG, "Sent SIP REGISTER to P-CSCF:\n" + sb.toString());
         } catch (Exception e) {
             LogUtil.e(TAG, "Error transmitting SIP REGISTER", e);
         }
     }
 
-    private void startIncomingReaderThread() {
+    private void startUdpReaderThread() {
+        new Thread(() -> {
+            final byte[] buffer = new byte[8192];
+            while (mIsConnected.get() && mUdpSocket != null && !mUdpSocket.isClosed()) {
+                try {
+                    final DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+                    mUdpSocket.receive(packet);
+                    final String message = new String(packet.getData(), 0, packet.getLength(), "UTF-8");
+                    LogUtil.i(TAG, "SIP Message Received via UDP:\n" + message);
+                    handleIncomingSipMessage(message);
+                } catch (Exception e) {
+                    if (mIsConnected.get()) {
+                        LogUtil.w(TAG, "UDP receive timeout/exception: " + e.getMessage());
+                    }
+                }
+            }
+        }).start();
+    }
+
+    private void startTcpReaderThread() {
         new Thread(() -> {
             final byte[] buffer = new byte[4096];
             try {
                 int bytesRead;
                 while (mIsConnected.get() && mInputStream != null && (bytesRead = mInputStream.read(buffer)) != -1) {
                     final String message = new String(buffer, 0, bytesRead, "UTF-8");
-                    LogUtil.i(TAG, "SIP Message Received:\n" + message);
+                    LogUtil.i(TAG, "SIP Message Received via TCP:\n" + message);
                     handleIncomingSipMessage(message);
                 }
             } catch (Exception e) {
-                LogUtil.e(TAG, "Error in SIP reader loop", e);
+                LogUtil.e(TAG, "Error in TCP reader loop", e);
                 mIsConnected.set(false);
             }
         }).start();
@@ -195,7 +249,6 @@ public class SipStackManager {
 
     private void handleIncomingSipMessage(String message) {
         if (message.startsWith("SIP/2.0 401")) {
-            // Extract Nonce and Realm for Digest challenge
             final String nonce = extractHeaderValue(message, "nonce=\"", "\"");
             final String realm = extractHeaderValue(message, "realm=\"", "\"");
             if (nonce != null && realm != null) {
@@ -222,7 +275,8 @@ public class SipStackManager {
     public void disconnect() {
         mIsConnected.set(false);
         try {
-            if (mSocket != null) mSocket.close();
+            if (mUdpSocket != null) mUdpSocket.close();
+            if (mTcpSocket != null) mTcpSocket.close();
         } catch (Exception ignored) {}
     }
 }
