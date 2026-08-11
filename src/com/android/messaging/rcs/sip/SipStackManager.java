@@ -297,7 +297,7 @@ public class SipStackManager {
                 mOutputStream.flush();
             }
 
-            LogUtil.i(TAG, "Sent SIP REGISTER to P-CSCF:\n" + sb.toString());
+            LogUtil.i(TAG, "Sent SIP REGISTER to P-CSCF (" + bytes.length + " bytes)");
         } catch (Exception e) {
             LogUtil.e(TAG, "Error transmitting SIP REGISTER", e);
         }
@@ -311,7 +311,7 @@ public class SipStackManager {
                     final DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                     mUdpSocket.receive(packet);
                     final String message = new String(packet.getData(), 0, packet.getLength(), "UTF-8");
-                    LogUtil.i(TAG, "SIP Message Received via UDP:\n" + message);
+                    LogUtil.d(TAG, "Received SIP response packet via UDP (" + packet.getLength() + " bytes)");
                     handleIncomingSipMessage(message);
                 } catch (java.net.SocketTimeoutException ste) {
                     // Normal socket timeout while waiting for incoming UDP packets, keep listening
@@ -334,7 +334,7 @@ public class SipStackManager {
                 int bytesRead;
                 while (mIsConnected.get() && mInputStream != null && (bytesRead = mInputStream.read(buffer)) != -1) {
                     final String message = new String(buffer, 0, bytesRead, "UTF-8");
-                    LogUtil.i(TAG, "SIP Message Received via TCP:\n" + message);
+                    LogUtil.d(TAG, "Received SIP response via TCP (" + bytesRead + " bytes)");
                     handleIncomingSipMessage(message);
                 }
             } catch (Exception e) {
@@ -460,7 +460,6 @@ public class SipStackManager {
             System.arraycopy(bodyBytes, 0, fullMessage, headerBytes.length, bodyBytes.length);
 
             LogUtil.i(TAG, "sendSipMessage: full SIP MESSAGE size=" + fullMessage.length + " bytes");
-            LogUtil.d(TAG, "sendSipMessage: SIP headers:\n" + sb.toString());
 
             if (mUseUdp && mUdpSocket != null) {
                 LogUtil.i(TAG, "sendSipMessage: sending via UDP to " + mTargetAddress + ":" + mTargetPort);
