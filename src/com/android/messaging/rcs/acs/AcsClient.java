@@ -30,9 +30,13 @@ import android.util.Xml;
 import com.android.messaging.util.BuglePrefs;
 import com.android.messaging.util.LogUtil;
 
+import org.json.JSONObject;
 import org.xmlpull.v1.XmlPullParser;
 
+import java.io.BufferedReader;
 import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.StringReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
@@ -98,7 +102,7 @@ public class AcsClient {
                     HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                     conn.setRequestMethod("GET");
                     conn.setRequestProperty("User-Agent", USER_AGENT);
-                    conn.setRequestProperty("Accept", "application/vnd.gsma.rcs-config+xml, application/xml, text/xml");
+                    conn.setRequestProperty("Accept", "application/vnd.gsma.rcs-config+xml, application/xml, text/xml, application/json");
                     conn.setConnectTimeout(10000);
                     conn.setReadTimeout(10000);
 
@@ -120,16 +124,20 @@ public class AcsClient {
 
                     if (lastResponseCode == HttpURLConnection.HTTP_OK) {
                         final InputStream inputStream = conn.getInputStream();
-                        final AcsConfig config = parseAcsXml(inputStream);
+                        final String rawResponse = readStreamString(inputStream);
                         inputStream.close();
                         conn.disconnect();
+
+                        LogUtil.i(TAG, "Carrier ACS Raw Response:\n" + rawResponse);
+
+                        final AcsConfig config = parseAcsResponse(rawResponse);
 
                         if (config != null && config.isValid()) {
                             LogUtil.i(TAG, "ACS Provisioning successful for domain: " + config.getSipDomain());
                             callback.onSuccess(config);
                             return;
                         } else {
-                            callback.onError("Failed to parse valid ACS XML configuration");
+                            callback.onError("Failed to parse valid ACS configuration payload");
                             return;
                         }
                     } else {
@@ -146,9 +154,16 @@ public class AcsClient {
         }).start();
     }
 
-    /**
-     * Formats mandatory GSMA RCC.14 query string parameters.
-     */
+    private static String readStreamString(InputStream is) throws Exception {
+        final BufferedReader reader = new BufferedReader(new InputStreamReader(is, "UTF-8"));
+        final StringBuilder sb = new StringBuilder();
+        String line;
+        while ((line = reader.readLine()) != null) {
+            sb.append(line).append("\n");
+        }
+        return sb.toString().trim();
+    }
+
     private static String buildGsmaQueryString(TelephonyManager tm, String otpToken) {
         final StringBuilder sb = new StringBuilder();
         sb.append("vers=0");
@@ -191,7 +206,7 @@ public class AcsClient {
                     final HttpURLConnection conn = (HttpURLConnection) network.openConnection(url);
                     conn.setRequestMethod("GET");
                     conn.setRequestProperty("User-Agent", USER_AGENT);
-                    conn.setRequestProperty("Accept", "application/vnd.gsma.rcs-config+xml, application/xml, text/xml");
+                    conn.setRequestProperty("Accept", "application/vnd.gsma.rcs-config+xml, application/xml, text/xml, application/json");
                     conn.setConnectTimeout(10000);
                     conn.setReadTimeout(10000);
                     return conn;
@@ -204,46 +219,77 @@ public class AcsClient {
     }
 
     /**
-     * Helper XML pull parser for GSMA RCC.14 provisioning document format.
+     * Parses ACS payload (supports standard XML tags, OMA-DM <parm name="..." value="..."/>, and JSON).
      */
-    private static AcsConfig parseAcsXml(InputStream is) {
+    private static AcsConfig parseAcsResponse(String rawResponse) {
+        if (TextUtils.isEmpty(rawResponse)) return null;
+
         final AcsConfig config = new AcsConfig();
+
+        // 1. Try parsing JSON format
+        if (rawResponse.startsWith("{")) {
+            try {
+                final JSONObject json = new JSONObject(rawResponse);
+                if (json.has("pcscf")) config.setPCscfAddress(json.getString("pcscf"));
+                if (json.has("domain")) config.setSipDomain(json.getString("domain"));
+                if (json.has("realm")) config.setSipRealm(json.getString("realm"));
+                if (json.has("username")) config.setDigestUsername(json.getString("username"));
+                if (json.has("password")) config.setDigestPassword(json.getString("password"));
+                if (json.has("ft_url")) config.setFtServerUrl(json.getString("ft_url"));
+                config.setRcsEnabled(true);
+                return config;
+            } catch (Exception ignored) {}
+        }
+
+        // 2. Parse XML (Standard XML tags + OMA-DM characteristic/parm format)
         try {
             final XmlPullParser parser = Xml.newPullParser();
             parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false);
-            parser.setInput(is, "UTF-8");
+            parser.setInput(new StringReader(rawResponse));
 
             int eventType = parser.getEventType();
             String currentTag = "";
+            config.setRcsEnabled(true); // Default to true if valid configuration XML is received
 
             while (eventType != XmlPullParser.END_DOCUMENT) {
                 if (eventType == XmlPullParser.START_TAG) {
                     currentTag = parser.getName();
+
+                    // OMA-DM <parm name="..." value="..."/> format
+                    if ("parm".equalsIgnoreCase(currentTag)) {
+                        final String name = parser.getAttributeValue(null, "name");
+                        final String value = parser.getAttributeValue(null, "value");
+                        if (name != null && value != null) {
+                            applyOmaDmParm(config, name, value);
+                        }
+                    }
                 } else if (eventType == XmlPullParser.TEXT) {
                     final String text = parser.getText().trim();
                     if (!text.isEmpty()) {
                         switch (currentTag.toLowerCase()) {
                             case "pcscfaddress":
                             case "outboundproxy":
-                                config.setPCscfAddress(text);
+                            case "lbo_p-cscf_address":
+                                if (config.getPCscfAddress() == null) config.setPCscfAddress(text);
                                 break;
                             case "pcscfport":
                                 try { config.setPCscfPort(Integer.parseInt(text)); } catch (Exception ignored) {}
                                 break;
                             case "home_network_domain_name":
                             case "sipdomain":
-                                config.setSipDomain(text);
+                            case "domain":
+                                if (config.getSipDomain() == null) config.setSipDomain(text);
                                 break;
                             case "realm":
-                                config.setSipRealm(text);
+                                if (config.getSipRealm() == null) config.setSipRealm(text);
                                 break;
                             case "username":
                             case "private_user_identity":
-                                config.setDigestUsername(text);
+                                if (config.getDigestUsername() == null) config.setDigestUsername(text);
                                 break;
                             case "userpassword":
                             case "password":
-                                config.setDigestPassword(text);
+                                if (config.getDigestPassword() == null) config.setDigestPassword(text);
                                 break;
                             case "ft_server":
                             case "fturl":
@@ -251,17 +297,42 @@ public class AcsClient {
                                 break;
                             case "rcsstate":
                             case "vers":
-                                config.setRcsEnabled(!"0".equals(text));
+                                config.setRcsEnabled(!"0".equals(text) && !"-1".equals(text));
                                 break;
                         }
                     }
                 }
                 eventType = parser.next();
             }
+
+            // Fallback: If sipDomain not explicitly set, default to pCscfAddress or carrier domain
+            if (config.getSipDomain() == null && config.getPCscfAddress() != null) {
+                config.setSipDomain(config.getPCscfAddress());
+            }
+
         } catch (Exception e) {
-            LogUtil.e(TAG, "Error parsing ACS XML", e);
+            LogUtil.e(TAG, "Error parsing ACS XML payload", e);
             return null;
         }
+
         return config;
+    }
+
+    private static void applyOmaDmParm(AcsConfig config, String name, String value) {
+        final String nameLower = name.toLowerCase();
+        if (nameLower.contains("p-cscf") || nameLower.contains("outboundproxy") || nameLower.equals("address")) {
+            if (config.getPCscfAddress() == null) config.setPCscfAddress(value);
+        } else if (nameLower.contains("domain") || nameLower.contains("realm")) {
+            if (config.getSipDomain() == null) config.setSipDomain(value);
+            if (config.getSipRealm() == null) config.setSipRealm(value);
+        } else if (nameLower.contains("username") || nameLower.contains("auth")) {
+            if (config.getDigestUsername() == null) config.setDigestUsername(value);
+        } else if (nameLower.contains("password") || nameLower.contains("secret")) {
+            if (config.getDigestPassword() == null) config.setDigestPassword(value);
+        } else if (nameLower.contains("ft") || nameLower.contains("url")) {
+            if (config.getFtServerUrl() == null) config.setFtServerUrl(value);
+        } else if (nameLower.equals("vers") || nameLower.equals("rcsstate")) {
+            config.setRcsEnabled(!"0".equals(value) && !"-1".equals(value));
+        }
     }
 }
