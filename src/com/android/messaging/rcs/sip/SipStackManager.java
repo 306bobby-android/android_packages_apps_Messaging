@@ -102,7 +102,6 @@ public class SipStackManager {
                 if (mUseUdp) {
                     LogUtil.i(TAG, "Initializing SIPoUDP DatagramSocket to " + mTargetAddress.getHostAddress());
                     mUdpSocket = new DatagramSocket();
-                    bindSocketToActiveNetwork(mUdpSocket);
                     mUdpSocket.setSoTimeout(10000);
                     mIsConnected.set(true);
                     startUdpReaderThread();
@@ -114,7 +113,6 @@ public class SipStackManager {
                     } else {
                         mTcpSocket = new Socket();
                     }
-                    bindSocketToActiveNetwork(mTcpSocket);
                     mTcpSocket.connect(new InetSocketAddress(mTargetAddress, mTargetPort), 10000);
                     mInputStream = mTcpSocket.getInputStream();
                     mOutputStream = mTcpSocket.getOutputStream();
@@ -142,7 +140,6 @@ public class SipStackManager {
                 }
                 mUseUdp = false;
                 mTcpSocket = new Socket();
-                bindSocketToActiveNetwork(mTcpSocket);
                 mTcpSocket.connect(new InetSocketAddress(mTargetAddress, mTargetPort), 10000);
                 mInputStream = mTcpSocket.getInputStream();
                 mOutputStream = mTcpSocket.getOutputStream();
@@ -154,34 +151,6 @@ public class SipStackManager {
                 LogUtil.e(TAG, "TCP Fallback connection failed", e);
             }
         }).start();
-    }
-
-    private void bindSocketToActiveNetwork(DatagramSocket socket) {
-        try {
-            final ConnectivityManager cm = (ConnectivityManager) mContext.getSystemService(Context.CONNECTIVITY_SERVICE);
-            if (cm == null) return;
-            final Network activeNetwork = cm.getActiveNetwork();
-            if (activeNetwork != null) {
-                activeNetwork.bindSocket(socket);
-                LogUtil.i(TAG, "Bound DatagramSocket to active network interface: " + activeNetwork);
-            }
-        } catch (Exception e) {
-            LogUtil.w(TAG, "Failed to bind UDP socket to active network: " + e.getMessage());
-        }
-    }
-
-    private void bindSocketToActiveNetwork(Socket socket) {
-        try {
-            final ConnectivityManager cm = (ConnectivityManager) mContext.getSystemService(Context.CONNECTIVITY_SERVICE);
-            if (cm == null) return;
-            final Network activeNetwork = cm.getActiveNetwork();
-            if (activeNetwork != null) {
-                activeNetwork.bindSocket(socket);
-                LogUtil.i(TAG, "Bound TCP socket to active network interface: " + activeNetwork);
-            }
-        } catch (Exception e) {
-            LogUtil.w(TAG, "Failed to bind TCP socket to active network: " + e.getMessage());
-        }
     }
 
     private static InetAddress[] resolveOverCellular(Context context, String host) {
