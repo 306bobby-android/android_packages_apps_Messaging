@@ -271,22 +271,30 @@ public class CapabilityDiscoveryManager {
                                     }
                                 }
                             } else if ("onComplete".equals(methodName)) {
-                                // Mark any requested URIs that were NOT resolved as NOT_SUPPORTED
+                                // Mark any requested URIs that were NOT resolved as NOT_SUPPORTED, but try SIP OPTIONS fallback
                                 LogUtil.i(TAG, "onComplete: resolved " + resolvedDestinations.size() + " of " + uris.size() + " requested URIs");
+                                final SipStackManager sipManager = RcsManager.getInstance(context).getSipStackManager();
                                 for (Uri requestedUri : uris) {
                                     final String reqDest = requestedUri.getSchemeSpecificPart();
                                     if (!resolvedDestinations.contains(reqDest)) {
-                                        LogUtil.i(TAG, "onComplete: no capability received for " + reqDest + " — marking as NOT_SUPPORTED");
+                                        LogUtil.i(TAG, "onComplete: no capability received for " + reqDest + " — attempting SIP OPTIONS query fallback");
+                                        if (sipManager != null) {
+                                            sipManager.sendOptions(reqDest);
+                                        }
                                         updateCapability(context, reqDest, CAPABILITY_NOT_SUPPORTED);
                                     }
                                 }
                             } else if ("onError".equals(methodName)) {
                                 LogUtil.w(TAG, "Batch UCE discovery error: " + (args != null && args.length > 0 ? args[0] : "unknown"));
-                                // On error, mark all as NOT_SUPPORTED so we don't keep retrying
+                                // On error, attempt SIP OPTIONS fallback
+                                final SipStackManager sipManager = RcsManager.getInstance(context).getSipStackManager();
                                 for (Uri requestedUri : uris) {
                                     final String reqDest = requestedUri.getSchemeSpecificPart();
                                     if (!resolvedDestinations.contains(reqDest)) {
-                                        LogUtil.i(TAG, "onError: marking " + reqDest + " as NOT_SUPPORTED due to error");
+                                        LogUtil.i(TAG, "onError: attempting SIP OPTIONS fallback for " + reqDest);
+                                        if (sipManager != null) {
+                                            sipManager.sendOptions(reqDest);
+                                        }
                                         updateCapability(context, reqDest, CAPABILITY_NOT_SUPPORTED);
                                     }
                                 }
