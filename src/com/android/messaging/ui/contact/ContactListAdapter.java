@@ -28,6 +28,7 @@ import com.android.messaging.R;
 import com.android.messaging.util.Assert;
 
 public class ContactListAdapter extends CursorAdapter implements SectionIndexer {
+    private final Context mContext;
     private final ContactListItemView.HostInterface mClivHostInterface;
     private final boolean mNeedAlphabetHeader;
     private ContactSectionIndexer mSectionIndexer;
@@ -36,6 +37,7 @@ public class ContactListAdapter extends CursorAdapter implements SectionIndexer 
             final ContactListItemView.HostInterface clivHostInterface,
             final boolean needAlphabetHeader) {
         super(context, cursor, 0);
+        mContext = context;
         mClivHostInterface = clivHostInterface;
         mNeedAlphabetHeader = needAlphabetHeader;
         mSectionIndexer = new ContactSectionIndexer(cursor);
