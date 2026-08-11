@@ -471,6 +471,10 @@ public class ConversationMessageData {
         return mProtocol == (MessageData.PROTOCOL_SMS);
     }
 
+    public final boolean getIsRcs() {
+        return mProtocol == (MessageData.PROTOCOL_RCS);
+    }
+
     public final int getStatus() {
         return mStatus;
     }

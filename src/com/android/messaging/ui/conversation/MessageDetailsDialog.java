@@ -58,7 +58,9 @@ public class MessageDetailsDialog {
             final ConversationMessageData data,
             final ConversationParticipantsData participants, final ParticipantData self) {
         String messageDetails;
-        if (data.getIsSms()) {
+        if (data.getIsRcs()) {
+            messageDetails = getRcsMessageDetails(data, participants, self);
+        } else if (data.getIsSms()) {
             messageDetails = getSmsMessageDetails(data, participants, self);
         } else {
             // TODO: Handle SMS_TYPE_MMS_PUSH_NOTIFICATION type differently?
@@ -91,6 +93,55 @@ public class MessageDetailsDialog {
         // Type: Text message
         details.append(res.getString(R.string.message_type_label));
         details.append(res.getString(R.string.text_message));
+
+        // From: +1425xxxxxxx
+        // or To: +1425xxxxxxx
+        final String rawSender = data.getSenderNormalizedDestination();
+        if (!TextUtils.isEmpty(rawSender)) {
+            details.append('\n');
+            details.append(res.getString(R.string.from_label));
+            details.append(rawSender);
+        }
+        final String rawRecipients = getRecipientParticipantString(participants,
+                data.getParticipantId(), data.getIsIncoming(), data.getSelfParticipantId());
+        if (!TextUtils.isEmpty(rawRecipients)) {
+            details.append('\n');
+            details.append(res.getString(R.string.to_address_label));
+            details.append(rawRecipients);
+        }
+
+        // Sent: Mon 11:42AM
+        if (data.getIsIncoming()) {
+            if (data.getSentTimeStamp() != MmsUtils.INVALID_TIMESTAMP) {
+                details.append('\n');
+                details.append(res.getString(R.string.sent_label));
+                details.append(
+                        Dates.getMessageDetailsTimeString(data.getSentTimeStamp()).toString());
+            }
+        }
+
+        // Sent: Mon 11:43AM
+        // or Received: Mon 11:43AM
+        appendSentOrReceivedTimestamp(res, details, data);
+
+        appendSimInfo(res, self, details);
+
+        return details.toString();
+    }
+
+    /**
+     * Return a string, separated by newlines, that contains a number of labels and values
+     * for this RCS message. The string will be displayed in a modal dialog.
+     * @return string list of various message properties
+     */
+    private static String getRcsMessageDetails(final ConversationMessageData data,
+            final ConversationParticipantsData participants, final ParticipantData self) {
+        final Resources res = Factory.get().getApplicationContext().getResources();
+        final StringBuilder details = new StringBuilder();
+
+        // Type: RCS message
+        details.append(res.getString(R.string.message_type_label));
+        details.append("RCS message");
 
         // From: +1425xxxxxxx
         // or To: +1425xxxxxxx
