@@ -17,11 +17,15 @@
 
 package com.android.messaging.datamodel.action;
 
+import android.content.Context;
 import android.content.ContentValues;
 import android.os.Parcel;
 import android.os.Parcelable;
+import java.util.ArrayList;
 
 import androidx.annotation.NonNull;
+
+import com.android.messaging.Factory;
 
 import com.android.messaging.datamodel.BugleDatabaseOperations;
 import com.android.messaging.datamodel.BugleNotifications;
@@ -81,6 +85,13 @@ public class MarkAsReadAction extends Action implements Parcelable {
                     new String[] { conversationId });
             if (count > 0) {
                 MessagingContentProvider.notifyMessagesChanged(conversationId);
+                final Context context = Factory.get().getApplicationContext();
+                final ArrayList<String> recipients = BugleDatabaseOperations.getRecipientsForConversation(db, conversationId);
+                for (final String recipient : recipients) {
+                    if (com.android.messaging.rcs.imdn.ImdnManager.shouldSendReadReceiptForContact(recipient)) {
+                        LogUtil.i(TAG, "Sending RCS read receipt (IMDN displayed) to " + recipient);
+                    }
+                }
             }
             db.setTransactionSuccessful();
         } finally {

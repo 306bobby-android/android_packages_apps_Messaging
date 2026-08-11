@@ -41,12 +41,16 @@ public class ImdnManager {
         if (TextUtils.isEmpty(destination)) {
             return READ_RECEIPT_DEFAULT;
         }
-        return BuglePrefs.getApplicationPrefs().getInt("pref_key_rcs_read_receipts_" + destination, READ_RECEIPT_DEFAULT);
+        final String norm = destination.replaceAll("[^0-9]", "");
+        final String key = norm.length() >= 10 ? norm.substring(norm.length() - 10) : norm;
+        return BuglePrefs.getApplicationPrefs().getInt("pref_key_rcs_read_receipts_" + key, READ_RECEIPT_DEFAULT);
     }
 
     public static void setPerContactReadReceiptSetting(String destination, int setting) {
         if (TextUtils.isEmpty(destination)) return;
-        BuglePrefs.getApplicationPrefs().putInt("pref_key_rcs_read_receipts_" + destination, setting);
+        final String norm = destination.replaceAll("[^0-9]", "");
+        final String key = norm.length() >= 10 ? norm.substring(norm.length() - 10) : norm;
+        BuglePrefs.getApplicationPrefs().putInt("pref_key_rcs_read_receipts_" + key, setting);
     }
 
     public static boolean shouldSendReadReceiptForContact(String destination) {
