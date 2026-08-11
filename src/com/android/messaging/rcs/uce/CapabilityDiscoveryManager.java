@@ -22,6 +22,7 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.text.TextUtils;
 import androidx.collection.ArrayMap;
+import java.util.Map;
 
 import com.android.messaging.datamodel.DatabaseHelper;
 import com.android.messaging.datamodel.DatabaseWrapper;
@@ -112,12 +113,12 @@ public class CapabilityDiscoveryManager {
                 final DatabaseWrapper db = DataModel.get().getDatabase();
                 Cursor cursor = null;
                 try {
-                    final String digits = normalized.replaceAll("[^0-9]", "");
-                    final String suffix = digits.length() >= 10 ? digits.substring(digits.length() - 10) : digits;
+                    final String dbDigits = normalized.replaceAll("[^0-9]", "");
+                    final String dbSuffix = dbDigits.length() >= 10 ? dbDigits.substring(dbDigits.length() - 10) : dbDigits;
                     cursor = db.query(DatabaseHelper.PARTICIPANTS_TABLE,
                             new String[] { DatabaseHelper.ParticipantColumns.RCS_CAPABILITY, DatabaseHelper.ParticipantColumns.RCS_DISCOVERY_TIMESTAMP },
                             DatabaseHelper.ParticipantColumns.NORMALIZED_DESTINATION + " LIKE ? OR " + DatabaseHelper.ParticipantColumns.DISPLAY_DESTINATION + " LIKE ?",
-                            new String[] { "%" + suffix, "%" + suffix }, null, null, null);
+                            new String[] { "%" + dbSuffix, "%" + dbSuffix }, null, null, null);
 
                     if (cursor != null && cursor.moveToFirst()) {
                         final int capability = cursor.getInt(0);
