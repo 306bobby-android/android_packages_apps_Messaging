@@ -19,6 +19,10 @@ package com.android.messaging.rcs;
 import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
+import android.telephony.SubscriptionManager;
+import android.telephony.ims.ImsManager;
+import android.telephony.ims.ImsRcsManager;
+import android.telephony.ims.RcsUceAdapter;
 
 import com.android.messaging.rcs.acs.AcsClient;
 import com.android.messaging.rcs.acs.AcsConfig;
@@ -54,6 +58,7 @@ public class RcsManager {
 
     private RcsManager(Context context) {
         mContext = context.getApplicationContext();
+        checkPlatformImsService();
     }
 
     public static synchronized RcsManager getInstance(Context context) {
@@ -149,6 +154,25 @@ public class RcsManager {
         }
         mSipStackManager = new SipStackManager(mContext, config);
         mSipStackManager.connectAndRegister();
+    }
+
+    private void checkPlatformImsService() {
+        try {
+            final ImsManager imsManager = (ImsManager) mContext.getSystemService(Context.TELEPHONY_IMS_SERVICE);
+            if (imsManager != null) {
+                final int subId = SubscriptionManager.getDefaultSmsSubscriptionId();
+                final ImsRcsManager rcsManager = imsManager.getImsRcsManager(subId);
+                if (rcsManager != null) {
+                    LogUtil.i(TAG, "Platform ImsRcsManager detected for subId: " + subId);
+                    final RcsUceAdapter uceAdapter = rcsManager.getUceAdapter();
+                    if (uceAdapter != null) {
+                        LogUtil.i(TAG, "RcsUceAdapter active for capability exchange");
+                    }
+                }
+            }
+        } catch (Exception e) {
+            LogUtil.w(TAG, "Platform ImsRcsManager check failed: " + e.getMessage());
+        }
     }
 
     public AcsConfig getAcsConfig() {
