@@ -136,14 +136,18 @@ public class SipStackManager {
             if (cm == null) return;
             for (Network network : cm.getAllNetworks()) {
                 final NetworkCapabilities caps = cm.getNetworkCapabilities(network);
-                if (caps != null && (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_IMS) || caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR))) {
-                    network.bindSocket(socket);
-                    LogUtil.i(TAG, "Bound DatagramSocket to cellular/IMS network interface: " + network);
-                    return;
+                if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
+                    try {
+                        network.bindSocket(socket);
+                        LogUtil.i(TAG, "Bound DatagramSocket to cellular network interface: " + network);
+                        return;
+                    } catch (Exception bindEx) {
+                        LogUtil.w(TAG, "Could not bind to network " + network + ": " + bindEx.getMessage());
+                    }
                 }
             }
         } catch (Exception e) {
-            LogUtil.w(TAG, "Failed to bind UDP socket to cellular/IMS network", e);
+            LogUtil.w(TAG, "Failed to bind UDP socket to cellular network", e);
         }
     }
 
@@ -153,14 +157,18 @@ public class SipStackManager {
             if (cm == null) return;
             for (Network network : cm.getAllNetworks()) {
                 final NetworkCapabilities caps = cm.getNetworkCapabilities(network);
-                if (caps != null && (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_IMS) || caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR))) {
-                    network.bindSocket(socket);
-                    LogUtil.i(TAG, "Bound TCP socket to cellular/IMS network interface: " + network);
-                    return;
+                if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
+                    try {
+                        network.bindSocket(socket);
+                        LogUtil.i(TAG, "Bound TCP socket to cellular network interface: " + network);
+                        return;
+                    } catch (Exception bindEx) {
+                        LogUtil.w(TAG, "Could not bind to network " + network + ": " + bindEx.getMessage());
+                    }
                 }
             }
         } catch (Exception e) {
-            LogUtil.w(TAG, "Failed to bind TCP socket to cellular/IMS network", e);
+            LogUtil.w(TAG, "Failed to bind TCP socket to cellular network", e);
         }
     }
 
