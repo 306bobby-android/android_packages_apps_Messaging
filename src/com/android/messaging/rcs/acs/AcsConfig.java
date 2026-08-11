@@ -34,6 +34,15 @@ public class AcsConfig {
     private boolean mIsRcsEnabled = false;
     private int mRegExpireSeconds = 3600;
 
+    public static AcsConfig createDefaultConfig() {
+        final AcsConfig config = new AcsConfig();
+        config.setPCscfAddress("ss.epdg.epc.mnc260.mcc310.pub.3gppnetwork.org");
+        config.setPCscfPort(5060);
+        config.setSipDomain("msg.pc.t-mobile.com");
+        config.setIsRcsEnabled(true);
+        return config;
+    }
+
     public String getPCscfAddress() {
         return mPCscfAddress;
     }

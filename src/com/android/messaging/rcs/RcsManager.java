@@ -217,7 +217,13 @@ public class RcsManager {
         return mAcsConfig;
     }
 
-    public SipStackManager getSipStackManager() {
+    public synchronized SipStackManager getSipStackManager() {
+        if (mSipStackManager == null) {
+            final AcsConfig config = (mAcsConfig != null) ? mAcsConfig : AcsConfig.createDefaultConfig();
+            mSipStackManager = new SipStackManager(mContext, config);
+            mSipStackManager.connectAndRegister();
+            LogUtil.i(TAG, "Lazy-initialized SipStackManager with P-CSCF: " + config.getPCscfAddress());
+        }
         return mSipStackManager;
     }
 
