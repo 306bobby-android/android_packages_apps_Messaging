@@ -18,7 +18,6 @@ package com.android.messaging.ui.appsettings;
 
 import android.os.Bundle;
 
-import androidx.preference.EditTextPreference;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceFragmentCompat;
 
@@ -39,20 +38,13 @@ public class RcsSettingsFragment extends PreferenceFragmentCompat implements Rcs
             enablePref.setOnPreferenceChangeListener((preference, newValue) -> {
                 final boolean enabled = (Boolean) newValue;
                 if (enabled) {
-                    RcsManager.getInstance(requireContext()).startProvisioning();
+                    RcsManager.getInstance(requireContext()).initialize();
                 }
                 updateStatusSummary();
                 return true;
             });
         }
 
-        final EditTextPreference customUrlPref = findPreference("pref_key_rcs_custom_acs_url");
-        if (customUrlPref != null) {
-            customUrlPref.setOnPreferenceChangeListener((preference, newValue) -> {
-                RcsManager.getInstance(requireContext()).startProvisioning();
-                return true;
-            });
-        }
 
         updateStatusSummary();
     }

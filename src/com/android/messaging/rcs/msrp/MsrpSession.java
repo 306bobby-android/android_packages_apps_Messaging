@@ -16,101 +16,245 @@
 
 package com.android.messaging.rcs.msrp;
 
+import android.content.Context;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+
 import com.android.messaging.util.LogUtil;
 
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.UUID;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Manages MSRP session transport over socket connection.
+ * One MSRP connection carrying a chat session's messages (RFC 4975).
+ *
+ * <p>Either end may own the TCP connection; the SDP {@code a=setup} attribute decides. We take the
+ * active role whenever the peer will accept it, since an outbound connection traverses NAT and
+ * carrier firewalls far more reliably than a listener.
+ *
+ * <p><b>Network selection.</b> RCS media belongs on the IMS PDN, which is a restricted network:
+ * binding to it requires {@code CONNECTIVITY_USE_RESTRICTED_NETWORKS}, a privileged permission.
+ * The app requests it but is not granted it unless installed as a privileged app. When the IMS
+ * network is unavailable we fall back to the default network and say so loudly, because a session
+ * that negotiates successfully and then silently fails to carry bytes is the most confusing
+ * failure mode available.
  */
 public class MsrpSession {
     private static final String TAG = "MsrpSession";
 
+    private static final int CONNECT_TIMEOUT_MS = 15000;
+    private static final int ACCEPT_TIMEOUT_MS = 20000;
+    private static final int READ_BUFFER_BYTES = 16 * 1024;
+
+    /** Receives complete messages reassembled from MSRP chunks. */
+    public interface MsrpListener {
+        void onMessage(String contentType, byte[] body);
+        void onSessionOpened();
+        void onSessionClosed(String reason);
+    }
+
+    private final Context mContext;
+    private final String mLocalPath;
+    private final String mRemotePath;
     private final String mRemoteHost;
     private final int mRemotePort;
-    private final String mFromMsrpPath;
-    private final String mToMsrpPath;
+    private final boolean mActive;
+    private final MsrpListener mListener;
 
     private Socket mSocket;
-    private InputStream mInputStream;
-    private OutputStream mOutputStream;
-    private final AtomicBoolean mIsActive = new AtomicBoolean(false);
+    private ServerSocket mServerSocket;
+    private InputStream mInput;
+    private OutputStream mOutput;
+    private final AtomicBoolean mActiveFlag = new AtomicBoolean(false);
 
-    public MsrpSession(String remoteHost, int remotePort, String fromMsrpPath, String toMsrpPath) {
+    public MsrpSession(Context context, String localPath, String remotePath, String remoteHost,
+            int remotePort, boolean active, MsrpListener listener) {
+        mContext = context.getApplicationContext();
+        mLocalPath = localPath;
+        mRemotePath = remotePath;
         mRemoteHost = remoteHost;
         mRemotePort = remotePort;
-        mFromMsrpPath = fromMsrpPath;
-        mToMsrpPath = toMsrpPath;
+        mActive = active;
+        mListener = listener;
     }
 
-    public void openSession() {
+    public boolean isOpen() {
+        return mActiveFlag.get();
+    }
+
+    /** Opens the connection on a background thread and begins reading. */
+    public void open(final ServerSocket preboundListener) {
         new Thread(() -> {
             try {
-                LogUtil.i(TAG, "Opening MSRP session to: " + mRemoteHost + ":" + mRemotePort);
-                mSocket = new Socket(mRemoteHost, mRemotePort);
-                mInputStream = mSocket.getInputStream();
-                mOutputStream = mSocket.getOutputStream();
-                mIsActive.set(true);
+                if (mActive) {
+                    connectOut();
+                } else {
+                    acceptIn(preboundListener);
+                }
+                mInput = mSocket.getInputStream();
+                mOutput = mSocket.getOutputStream();
+                mActiveFlag.set(true);
+                LogUtil.i(TAG, "MSRP session open (" + (mActive ? "active" : "passive") + ") to "
+                        + mSocket.getRemoteSocketAddress());
 
-                startReaderLoop();
+                if (mActive) {
+                    // RFC 4975 s7.1: the active endpoint sends an empty SEND to bind the session
+                    // before any content flows.
+                    final String tx = MsrpChunk.newTransactionId();
+                    write(MsrpChunk.buildEmptySend(tx, mRemotePath, mLocalPath));
+                }
+                if (mListener != null) mListener.onSessionOpened();
+                readLoop();
             } catch (Exception e) {
-                LogUtil.e(TAG, "Failed to connect MSRP session socket", e);
-                mIsActive.set(false);
+                LogUtil.e(TAG, "MSRP session failed to open", e);
+                mActiveFlag.set(false);
+                if (mListener != null) mListener.onSessionClosed(String.valueOf(e.getMessage()));
             }
-        }).start();
+        }, "MsrpSession").start();
     }
 
-    public void sendTextMessage(String messageId, String textContent) {
-        if (!mIsActive.get()) return;
-        new Thread(() -> {
-            try {
-                final String frame = MsrpChunk.buildSendChunk(mFromMsrpPath, mToMsrpPath, messageId, "text/plain", textContent);
-                mOutputStream.write(frame.getBytes("UTF-8"));
-                mOutputStream.flush();
-                LogUtil.i(TAG, "Transmitted MSRP text frame ID: " + messageId);
-            } catch (Exception e) {
-                LogUtil.e(TAG, "Error sending MSRP frame", e);
-            }
-        }).start();
+    private void connectOut() throws Exception {
+        mSocket = new Socket();
+        final Network ims = findImsNetwork();
+        if (ims != null) {
+            ims.bindSocket(mSocket);
+            LogUtil.i(TAG, "MSRP socket bound to IMS network");
+        } else {
+            LogUtil.w(TAG, "IMS network unavailable to this app; MSRP will use the default "
+                    + "network. This usually fails on carrier RCS. Grant "
+                    + "CONNECTIVITY_USE_RESTRICTED_NETWORKS by installing as a privileged app.");
+        }
+        LogUtil.i(TAG, "Connecting MSRP to " + mRemoteHost + ":" + mRemotePort);
+        mSocket.connect(new InetSocketAddress(mRemoteHost, mRemotePort), CONNECT_TIMEOUT_MS);
     }
 
-    public void sendIsComposing(boolean isTyping) {
-        if (!mIsActive.get()) return;
-        new Thread(() -> {
-            try {
-                final String payload = MsrpChunk.buildIsComposingPayload(isTyping);
-                final String frame = MsrpChunk.buildSendChunk(mFromMsrpPath, mToMsrpPath, UUID.randomUUID().toString(),
-                        "application/im-iscomposing+xml", payload);
-                mOutputStream.write(frame.getBytes("UTF-8"));
-                mOutputStream.flush();
-            } catch (Exception e) {
-                LogUtil.e(TAG, "Error sending MSRP IS-COMPOSING frame", e);
-            }
-        }).start();
+    private void acceptIn(ServerSocket preboundListener) throws Exception {
+        mServerSocket = preboundListener != null ? preboundListener : new ServerSocket(0);
+        mServerSocket.setSoTimeout(ACCEPT_TIMEOUT_MS);
+        LogUtil.i(TAG, "Awaiting inbound MSRP on port " + mServerSocket.getLocalPort());
+        mSocket = mServerSocket.accept();
     }
 
-    private void startReaderLoop() {
-        final byte[] buffer = new byte[4096];
+    /**
+     * Returns the IMS network if this app is permitted to see it.
+     *
+     * <p>The IMS network lacks {@code NOT_RESTRICTED}, so an app without
+     * {@code CONNECTIVITY_USE_RESTRICTED_NETWORKS} will simply not find it here.
+     */
+    private Network findImsNetwork() {
         try {
-            int len;
-            while (mIsActive.get() && (len = mInputStream.read(buffer)) != -1) {
-                final String incoming = new String(buffer, 0, len, "UTF-8");
-                LogUtil.i(TAG, "MSRP Frame Received:\n" + incoming);
+            final ConnectivityManager cm =
+                    (ConnectivityManager) mContext.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return null;
+            for (Network network : cm.getAllNetworks()) {
+                final NetworkCapabilities caps = cm.getNetworkCapabilities(network);
+                if (caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_IMS)) {
+                    return network;
+                }
             }
         } catch (Exception e) {
-            LogUtil.e(TAG, "MSRP reader loop closed", e);
-            mIsActive.set(false);
+            LogUtil.w(TAG, "IMS network lookup failed: " + e);
+        }
+        return null;
+    }
+
+    /** Sends a message body as a single complete MSRP SEND chunk. */
+    public boolean sendMessage(String messageId, String contentType, byte[] body) {
+        if (!mActiveFlag.get()) {
+            LogUtil.w(TAG, "sendMessage: session not open");
+            return false;
+        }
+        try {
+            final String tx = MsrpChunk.newTransactionId();
+            write(MsrpChunk.buildSend(tx, mRemotePath, mLocalPath, messageId, contentType, body, true));
+            LogUtil.i(TAG, "MSRP SEND dispatched, messageId=" + messageId
+                    + " bytes=" + (body == null ? 0 : body.length));
+            return true;
+        } catch (Exception e) {
+            LogUtil.e(TAG, "MSRP send failed", e);
+            return false;
         }
     }
 
-    public void closeSession() {
-        mIsActive.set(false);
+    public boolean sendIsComposing(boolean isTyping) {
+        return sendMessage(MsrpChunk.newTransactionId(), "application/im-iscomposing+xml",
+                MsrpChunk.buildIsComposingPayload(isTyping).getBytes(StandardCharsets.UTF_8));
+    }
+
+    private synchronized void write(byte[] frame) throws Exception {
+        mOutput.write(frame);
+        mOutput.flush();
+    }
+
+    private void readLoop() {
+        final byte[] buffer = new byte[READ_BUFFER_BYTES];
+        int filled = 0;
         try {
-            if (mSocket != null) mSocket.close();
-        } catch (Exception ignored) {}
+            while (mActiveFlag.get()) {
+                final int read = mInput.read(buffer, filled, buffer.length - filled);
+                if (read < 0) break;
+                filled += read;
+
+                // A single read may contain several frames, or a partial one.
+                int consumed;
+                while (filled > 0 && (consumed = MsrpChunk.frameLength(buffer, filled)) > 0) {
+                    handleChunk(MsrpChunk.parse(buffer, 0, consumed));
+                    System.arraycopy(buffer, consumed, buffer, 0, filled - consumed);
+                    filled -= consumed;
+                }
+                if (filled == buffer.length) {
+                    LogUtil.e(TAG, "MSRP frame exceeds buffer; dropping connection");
+                    break;
+                }
+            }
+        } catch (Exception e) {
+            if (mActiveFlag.get()) LogUtil.w(TAG, "MSRP read loop ended: " + e);
+        }
+        close("read loop ended");
+    }
+
+    private void handleChunk(MsrpChunk chunk) {
+        if (chunk == null) return;
+
+        if (!chunk.isRequest()) {
+            LogUtil.i(TAG, "MSRP response " + chunk.statusCode + " for tx=" + chunk.transactionId);
+            return;
+        }
+
+        if ("SEND".equals(chunk.method)) {
+            // Acknowledge before dispatching so a slow consumer cannot stall the peer.
+            try {
+                write(MsrpChunk.buildResponse(chunk.transactionId, 200, "OK",
+                        mRemotePath, mLocalPath));
+            } catch (Exception e) {
+                LogUtil.w(TAG, "Failed to acknowledge MSRP SEND: " + e);
+            }
+            if (chunk.body != null && chunk.body.length > 0 && mListener != null) {
+                final String contentType = chunk.header("Content-Type");
+                LogUtil.i(TAG, "MSRP SEND received, type=" + contentType
+                        + " bytes=" + chunk.body.length);
+                mListener.onMessage(contentType, chunk.body);
+            }
+        } else if ("REPORT".equals(chunk.method)) {
+            LogUtil.i(TAG, "MSRP REPORT for messageId=" + chunk.messageId()
+                    + " status=" + chunk.header("Status"));
+            // REPORT is never acknowledged (RFC 4975 s7.1.2).
+        } else {
+            LogUtil.i(TAG, "Unhandled MSRP method: " + chunk.method);
+        }
+    }
+
+    public void close(String reason) {
+        if (!mActiveFlag.getAndSet(false)) return;
+        LogUtil.i(TAG, "Closing MSRP session: " + reason);
+        try { if (mSocket != null) mSocket.close(); } catch (Exception ignored) {}
+        try { if (mServerSocket != null) mServerSocket.close(); } catch (Exception ignored) {}
+        if (mListener != null) mListener.onSessionClosed(reason);
     }
 }

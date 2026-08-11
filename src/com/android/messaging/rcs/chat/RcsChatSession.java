@@ -1,0 +1,402 @@
+/*
+ * Copyright (C) 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.android.messaging.rcs.chat;
+
+import android.content.Context;
+
+import com.android.messaging.rcs.msrp.MsrpSession;
+import com.android.messaging.rcs.sip.SipConfigSnapshot;
+import com.android.messaging.util.LogUtil;
+
+import java.net.ServerSocket;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.List;
+import java.util.UUID;
+
+/**
+ * One RCS session-mode chat dialog: the SIP INVITE dialog plus the MSRP connection it negotiates.
+ *
+ * <p>This carrier authorizes session mode only ({@code ChatAuth=1}, {@code standaloneMsgAuth=0}),
+ * so a message cannot simply be posted as a SIP MESSAGE. Every message rides an MSRP session that
+ * an INVITE established.
+ */
+public class RcsChatSession {
+    private static final String TAG = "RcsChatSession";
+
+    /** Feature tag identifying session-mode CPM chat, required in Contact and Accept-Contact. */
+    static final String ICSI_CHAT_SESSION =
+            "+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.oma.cpm.session\"";
+
+    public enum State { IDLE, INVITING, ESTABLISHED, TERMINATING, CLOSED }
+
+    /** A message queued before the MSRP session was ready. */
+    private static final class Pending {
+        final String messageId;
+        final String text;
+        Pending(String messageId, String text) {
+            this.messageId = messageId;
+            this.text = text;
+        }
+    }
+
+    public interface Callback {
+        void onIncomingText(RcsChatSession session, String fromUri, String messageId, String text);
+        void onSessionEstablished(RcsChatSession session);
+        void onSessionClosed(RcsChatSession session, String reason);
+        void onMessageSent(RcsChatSession session, String messageId);
+        void onMessageFailed(RcsChatSession session, String messageId, String reason);
+    }
+
+    private final Context mContext;
+    private final ChatSipTransport mTransport;
+    private final Callback mCallback;
+    private final boolean mIncoming;
+
+    private final String mRemoteUri;
+    private final String mCallId;
+    private final String mLocalTag;
+    private String mRemoteTag;
+    private long mLocalCSeq = 1;
+
+    private final String mMsrpSessionId;
+    private String mLocalMsrpPath;
+    private String mRemoteMsrpPath;
+    private ServerSocket mListener;
+
+    private MsrpSession mMsrp;
+    private State mState = State.IDLE;
+    private final Deque<Pending> mPending = new ArrayDeque<>();
+
+    /** Route set captured from the dialog-establishing exchange. */
+    private final List<String> mRouteSet = new ArrayList<>();
+    private String mRemoteTarget;
+
+    RcsChatSession(Context context, ChatSipTransport transport, String remoteUri, String callId,
+            boolean incoming, Callback callback) {
+        mContext = context.getApplicationContext();
+        mTransport = transport;
+        mRemoteUri = remoteUri;
+        mCallId = callId != null ? callId : UUID.randomUUID().toString();
+        mIncoming = incoming;
+        mCallback = callback;
+        mLocalTag = randomToken(8);
+        mMsrpSessionId = randomToken(12);
+    }
+
+    public String getCallId() {
+        return mCallId;
+    }
+
+    public String getRemoteUri() {
+        return mRemoteUri;
+    }
+
+    public State getState() {
+        return mState;
+    }
+
+    public boolean isEstablished() {
+        return mState == State.ESTABLISHED;
+    }
+
+    String getLocalTag() {
+        return mLocalTag;
+    }
+
+    void setRemoteTag(String tag) {
+        mRemoteTag = tag;
+    }
+
+    String getRemoteTag() {
+        return mRemoteTag;
+    }
+
+    void setRemoteTarget(String target) {
+        mRemoteTarget = target;
+    }
+
+    void setRouteSet(List<String> routeSet) {
+        mRouteSet.clear();
+        if (routeSet != null) mRouteSet.addAll(routeSet);
+    }
+
+    long nextCSeq() {
+        return mLocalCSeq++;
+    }
+
+    long currentCSeq() {
+        return mLocalCSeq;
+    }
+
+    List<String> getRouteSet() {
+        return mRouteSet;
+    }
+
+    String getRemoteTarget() {
+        return mRemoteTarget != null ? mRemoteTarget : mRemoteUri;
+    }
+
+    // ---------------------------------------------------------------- outgoing setup
+
+    /**
+     * Queues a message and starts the session if it is not already coming up.
+     */
+    public void enqueueText(String messageId, String text) {
+        synchronized (mPending) {
+            mPending.add(new Pending(messageId, text));
+        }
+        if (mState == State.ESTABLISHED) {
+            flushPending();
+        } else if (mState == State.IDLE) {
+            start();
+        }
+    }
+
+    /** Sends the initial INVITE. */
+    public void start() {
+        final SipConfigSnapshot config = mTransport.getConfig();
+        if (config == null) {
+            fail("No SipDelegateConfiguration available");
+            return;
+        }
+        final String localIp = config.localIpLiteral();
+        if (localIp == null) {
+            fail("No local address in SipDelegateConfiguration");
+            return;
+        }
+
+        // Bind the listener up front so the SDP can advertise a port we genuinely hold. We offer
+        // the active role, but a peer that insists on active needs somewhere to connect.
+        int localPort;
+        try {
+            mListener = new ServerSocket(0);
+            localPort = mListener.getLocalPort();
+        } catch (Exception e) {
+            LogUtil.w(TAG, "Could not bind local MSRP listener; advertising port 9", e);
+            localPort = 9;
+        }
+        mLocalMsrpPath = buildMsrpPath(localIp, localPort, mMsrpSessionId);
+
+        final String sdp = MsrpSdp.build(localIp, localPort, mLocalMsrpPath, true);
+        mState = State.INVITING;
+        LogUtil.i(TAG, "INVITE -> " + mRemoteUri + " callId=" + mCallId);
+        if (!mTransport.sendInvite(this, sdp.getBytes(StandardCharsets.UTF_8))) {
+            fail("Failed to hand INVITE to the SIP delegate");
+        }
+    }
+
+    // ---------------------------------------------------------------- responses
+
+    /** Handles a final response to our INVITE. */
+    void onInviteResponse(int status, SipConfigSnapshot config, String remoteSdp) {
+        if (status >= 100 && status < 200) {
+            LogUtil.i(TAG, "INVITE provisional " + status);
+            return;
+        }
+        if (status >= 300) {
+            fail("INVITE rejected with " + status);
+            return;
+        }
+
+        LogUtil.i(TAG, "INVITE 200 OK; negotiating MSRP");
+        final MsrpSdp.Parsed answer = MsrpSdp.parse(remoteSdp);
+        mRemoteMsrpPath = answer.path;
+        if (mRemoteMsrpPath == null) {
+            fail("200 OK carried no a=path");
+            return;
+        }
+        openMsrp(answer, /* weAreActive= */ answer.peerIsPassive());
+    }
+
+    /** Handles an inbound INVITE that we are accepting. */
+    void onIncomingInvite(String remoteSdp) {
+        final SipConfigSnapshot config = mTransport.getConfig();
+        if (config == null) {
+            fail("No SipDelegateConfiguration available");
+            return;
+        }
+        final MsrpSdp.Parsed offer = MsrpSdp.parse(remoteSdp);
+        mRemoteMsrpPath = offer.path;
+
+        final String localIp = config.localIpLiteral();
+        int localPort = 9;
+        // If the peer took the active role we must be reachable, so hold a real port.
+        final boolean weAreActive = offer.peerIsPassive();
+        if (!weAreActive) {
+            try {
+                mListener = new ServerSocket(0);
+                localPort = mListener.getLocalPort();
+            } catch (Exception e) {
+                LogUtil.e(TAG, "Cannot bind MSRP listener for inbound session", e);
+            }
+        }
+        mLocalMsrpPath = buildMsrpPath(localIp, localPort, mMsrpSessionId);
+
+        final String sdp = MsrpSdp.build(localIp, localPort, mLocalMsrpPath, weAreActive);
+        if (!mTransport.sendInviteOk(this, sdp.getBytes(StandardCharsets.UTF_8))) {
+            fail("Failed to answer inbound INVITE");
+            return;
+        }
+        openMsrp(offer, weAreActive);
+    }
+
+    private void openMsrp(MsrpSdp.Parsed peer, boolean weAreActive) {
+        final String host = peer.host();
+        final int port = peer.port();
+        if (weAreActive && (host == null || port <= 0)) {
+            fail("Peer SDP has no usable MSRP endpoint");
+            return;
+        }
+
+        mMsrp = new MsrpSession(mContext, mLocalMsrpPath, mRemoteMsrpPath, host, port, weAreActive,
+                new MsrpSession.MsrpListener() {
+                    @Override
+                    public void onSessionOpened() {
+                        mState = State.ESTABLISHED;
+                        LogUtil.i(TAG, "Chat session established with " + mRemoteUri);
+                        if (mCallback != null) mCallback.onSessionEstablished(RcsChatSession.this);
+                        flushPending();
+                    }
+
+                    @Override
+                    public void onMessage(String contentType, byte[] body) {
+                        handleIncomingPayload(contentType, body);
+                    }
+
+                    @Override
+                    public void onSessionClosed(String reason) {
+                        if (mState != State.CLOSED) {
+                            mState = State.CLOSED;
+                            failPending("MSRP session closed: " + reason);
+                            if (mCallback != null) {
+                                mCallback.onSessionClosed(RcsChatSession.this, reason);
+                            }
+                        }
+                    }
+                });
+        mMsrp.open(weAreActive ? null : mListener);
+    }
+
+    private void handleIncomingPayload(String contentType, byte[] body) {
+        final String raw = new String(body, StandardCharsets.UTF_8);
+        if (contentType != null && contentType.toLowerCase().startsWith("message/cpim")) {
+            final com.android.messaging.rcs.sip.CpimParser.CpimMessage cpim =
+                    com.android.messaging.rcs.sip.CpimParser.parseCpim(raw);
+            if (cpim == null || cpim.body == null || cpim.body.isEmpty()) {
+                LogUtil.w(TAG, "Unparseable CPIM payload");
+                return;
+            }
+            final String from = cpim.fromUri != null ? cpim.fromUri : mRemoteUri;
+            if (mCallback != null) {
+                mCallback.onIncomingText(this, from, cpim.messageId, cpim.body);
+            }
+        } else if (contentType != null && contentType.contains("im-iscomposing")) {
+            LogUtil.i(TAG, "Peer is-composing indication");
+        } else {
+            LogUtil.i(TAG, "Ignoring MSRP payload of type " + contentType);
+        }
+    }
+
+    // ---------------------------------------------------------------- sending
+
+    private void flushPending() {
+        if (mMsrp == null || !mMsrp.isOpen()) return;
+        final SipConfigSnapshot config = mTransport.getConfig();
+        final String localAor = config != null ? config.localAor() : "sip:anonymous@invalid";
+
+        while (true) {
+            final Pending next;
+            synchronized (mPending) {
+                next = mPending.poll();
+            }
+            if (next == null) return;
+
+            final String cpim = com.android.messaging.rcs.sip.CpimParser.formatCpimMessage(
+                    localAor, mRemoteUri, next.messageId, next.text);
+            final boolean ok = mMsrp.sendMessage(next.messageId, "message/cpim",
+                    cpim.getBytes(StandardCharsets.UTF_8));
+            if (mCallback != null) {
+                if (ok) {
+                    mCallback.onMessageSent(this, next.messageId);
+                } else {
+                    mCallback.onMessageFailed(this, next.messageId, "MSRP send failed");
+                }
+            }
+        }
+    }
+
+    public boolean sendIsComposing(boolean typing) {
+        return mMsrp != null && mMsrp.isOpen() && mMsrp.sendIsComposing(typing);
+    }
+
+    // ---------------------------------------------------------------- teardown
+
+    public void terminate(String reason) {
+        if (mState == State.CLOSED || mState == State.TERMINATING) return;
+        mState = State.TERMINATING;
+        LogUtil.i(TAG, "Terminating session " + mCallId + ": " + reason);
+        if (mMsrp != null) mMsrp.close(reason);
+        try { if (mListener != null) mListener.close(); } catch (Exception ignored) {}
+        mTransport.sendBye(this);
+        mState = State.CLOSED;
+        failPending(reason);
+        if (mCallback != null) mCallback.onSessionClosed(this, reason);
+    }
+
+    /** Called when the peer sent BYE; no BYE of our own is owed. */
+    void onRemoteBye() {
+        mState = State.CLOSED;
+        if (mMsrp != null) mMsrp.close("remote BYE");
+        try { if (mListener != null) mListener.close(); } catch (Exception ignored) {}
+        failPending("remote hung up");
+        if (mCallback != null) mCallback.onSessionClosed(this, "remote BYE");
+    }
+
+    private void fail(String reason) {
+        LogUtil.e(TAG, "Session " + mCallId + " failed: " + reason);
+        mState = State.CLOSED;
+        try { if (mListener != null) mListener.close(); } catch (Exception ignored) {}
+        failPending(reason);
+        if (mCallback != null) mCallback.onSessionClosed(this, reason);
+    }
+
+    private void failPending(String reason) {
+        while (true) {
+            final Pending next;
+            synchronized (mPending) {
+                next = mPending.poll();
+            }
+            if (next == null) return;
+            if (mCallback != null) mCallback.onMessageFailed(this, next.messageId, reason);
+        }
+    }
+
+    // ---------------------------------------------------------------- helpers
+
+    private static String buildMsrpPath(String localIp, int port, String sessionId) {
+        final String host = SipConfigSnapshot.formatHost(localIp);
+        return "msrp://" + host + ":" + port + "/" + sessionId + ";tcp";
+    }
+
+    static String randomToken(int length) {
+        final String hex = UUID.randomUUID().toString().replace("-", "");
+        return hex.substring(0, Math.min(length, hex.length()));
+    }
+}

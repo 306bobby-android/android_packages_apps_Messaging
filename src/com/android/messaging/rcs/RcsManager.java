@@ -22,22 +22,30 @@ import android.os.Handler;
 import android.os.Looper;
 import android.telephony.SubscriptionManager;
 import android.telephony.ims.ImsManager;
-
 import android.telephony.ims.ImsRcsManager;
 import android.telephony.ims.ImsStateCallback;
 import android.telephony.ims.RcsUceAdapter;
 
-import com.android.messaging.rcs.acs.AcsClient;
-import com.android.messaging.rcs.acs.AcsConfig;
-import com.android.messaging.rcs.sip.SipDelegateProbe;
-import com.android.messaging.rcs.sip.SipStackManager;
+import com.android.messaging.rcs.chat.RcsChatSessionManager;
+import com.android.messaging.rcs.sip.SipDelegateTransport;
 import com.android.messaging.util.LogUtil;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Main Singleton Manager for Open-Standard RCS Service operations.
+ * Entry point for RCS service state.
+ *
+ * <p>Two independent platform facilities back this:
+ * <ul>
+ *   <li>{@link RcsUceAdapter} for capability discovery, which works whenever the carrier enables
+ *       presence exchange.</li>
+ *   <li>A {@code SipDelegate} for the actual messaging transport, which requires IMS Single
+ *       Registration to be enabled for the subscription.</li>
+ * </ul>
+ *
+ * <p>There is deliberately no ACS client or app-owned SIP stack here. The carrier's provisioning
+ * document is delivered by the platform, and IMS registration belongs to the modem.
  */
 public class RcsManager {
     private static final String TAG = "RcsManager";
@@ -55,8 +63,6 @@ public class RcsManager {
     private final Context mContext;
     private int mState = STATE_DISCONNECTED;
     private String mLastErrorReason;
-    private AcsConfig mAcsConfig;
-    private SipStackManager mSipStackManager;
     private RcsUceAdapter mPlatformUceAdapter;
     private final List<RcsStateListener> mListeners = new ArrayList<>();
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
@@ -103,131 +109,96 @@ public class RcsManager {
         });
     }
 
+    /**
+     * True when a message can actually be sent over RCS right now. This deliberately requires a
+     * usable transport rather than merely a discovered capability — reporting availability without
+     * one is what previously let messages be marked sent when nothing had been transmitted.
+     */
     public boolean isRcsAvailable() {
-        return mState == STATE_REGISTERED && (mAcsConfig != null && mAcsConfig.isRcsEnabled() || mPlatformUceAdapter != null);
+        return SipDelegateTransport.getInstance(mContext).isChatReady();
+    }
+
+    /** True when contact capability discovery is usable, independent of the messaging transport. */
+    public boolean isCapabilityDiscoveryAvailable() {
+        return mPlatformUceAdapter != null;
     }
 
     /**
-     * Initializes ACS carrier provisioning request.
+     * Brings up the RCS transport. Safe to call repeatedly.
      */
-    public void startProvisioning() {
-        LogUtil.i(TAG, "Starting Carrier ACS Provisioning...");
-        // Diagnostic: report whether IMS Single Registration can give us a real SIP transport.
-        SipDelegateProbe.runOnce(mContext);
+    public void initialize() {
+        LogUtil.i(TAG, "Initializing RCS transport...");
         notifyStateChanged(STATE_CONNECTING, null);
-        AcsClient.requestConfiguration(mContext, null, new AcsClient.AcsCallback() {
-            @Override
-            public void onSuccess(AcsConfig config) {
-                mAcsConfig = config;
-                notifyStateChanged(STATE_REGISTERED, null);
-                LogUtil.i(TAG, "RCS Engine registered with P-CSCF: " + config.getPCscfAddress());
-                startSipRegistration(config);
-            }
 
-            @Override
-            public void onError(String errorReason) {
-                if (mPlatformUceAdapter != null) {
-                    LogUtil.i(TAG, "ACS Provisioning error, using platform ImsRcsManager state");
-                    notifyStateChanged(STATE_REGISTERED, null);
-                } else {
-                    notifyStateChanged(STATE_DISCONNECTED, errorReason);
-                    LogUtil.e(TAG, "ACS Provisioning failed: " + errorReason);
-                }
-            }
-        });
+        final SipDelegateTransport transport = SipDelegateTransport.getInstance(mContext);
+        RcsChatSessionManager.getInstance(mContext).attach(transport);
+        transport.ensureStarted();
+
+        mMainHandler.postDelayed(this::publishTransportState, 8000);
     }
 
-    /**
-     * Called when SMS OTP code is intercepted by AcsSmsReceiver.
-     */
-    public void onAcsOtpReceived(String otp) {
-        LogUtil.i(TAG, "Retrying ACS Provisioning with OTP verification code...");
-        notifyStateChanged(STATE_CONNECTING, null);
-        AcsClient.requestConfiguration(mContext, otp, new AcsClient.AcsCallback() {
-            @Override
-            public void onSuccess(AcsConfig config) {
-                mAcsConfig = config;
-                notifyStateChanged(STATE_REGISTERED, null);
-                LogUtil.i(TAG, "RCS Engine successfully registered via OTP with: " + config.getPCscfAddress());
-                startSipRegistration(config);
-            }
-
-            @Override
-            public void onError(String errorReason) {
-                notifyStateChanged(STATE_DISCONNECTED, errorReason);
-                LogUtil.e(TAG, "ACS OTP Provisioning failed: " + errorReason);
-            }
-        });
-    }
-
-    private synchronized void startSipRegistration(AcsConfig config) {
-        if (mSipStackManager != null) {
-            mSipStackManager.disconnect();
+    private void publishTransportState() {
+        if (SipDelegateTransport.getInstance(mContext).isChatReady()) {
+            LogUtil.i(TAG, "RCS chat transport ready");
+            notifyStateChanged(STATE_REGISTERED, null);
+        } else if (mPlatformUceAdapter != null) {
+            LogUtil.i(TAG, "No chat transport; capability discovery only");
+            notifyStateChanged(STATE_DISCONNECTED, "No SIP delegate (single registration off?)");
+        } else {
+            notifyStateChanged(STATE_DISCONNECTED, "RCS unavailable");
         }
-        mSipStackManager = new SipStackManager(mContext, config);
-        mSipStackManager.connectAndRegister();
     }
 
     private void checkPlatformImsService() {
         try {
-            final ImsManager imsManager = (ImsManager) mContext.getSystemService(Context.TELEPHONY_IMS_SERVICE);
-            if (imsManager != null) {
-                int subId = SubscriptionManager.getDefaultSmsSubscriptionId();
-                if (subId == SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
-                    subId = SubscriptionManager.getDefaultDataSubscriptionId();
-                }
-                if (subId == SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
-                    final SubscriptionManager subMgr = mContext.getSystemService(SubscriptionManager.class);
-                    if (subMgr != null && subMgr.getActiveSubscriptionInfoList() != null && !subMgr.getActiveSubscriptionInfoList().isEmpty()) {
-                        subId = subMgr.getActiveSubscriptionInfoList().get(0).getSubscriptionId();
-                    }
-                }
-                final ImsRcsManager rcsManager = imsManager.getImsRcsManager(subId);
-                if (rcsManager != null) {
-                    LogUtil.i(TAG, "Platform ImsRcsManager detected for subId: " + subId);
-                    final RcsUceAdapter uceAdapter = rcsManager.getUceAdapter();
-                    if (uceAdapter != null) {
-                        LogUtil.i(TAG, "RcsUceAdapter active for capability exchange");
-                        mPlatformUceAdapter = uceAdapter;
-                    }
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        rcsManager.registerImsStateCallback(mContext.getMainExecutor(), new ImsStateCallback() {
-                            @Override
-                            public void onUnavailable(int reason) {
-                                LogUtil.w(TAG, "Platform IMS RCS Unavailable reason: " + reason);
-                            }
+            final ImsManager imsManager =
+                    (ImsManager) mContext.getSystemService(Context.TELEPHONY_IMS_SERVICE);
+            if (imsManager == null) return;
 
-                            @Override
-                            public void onAvailable() {
-                                LogUtil.i(TAG, "Platform IMS RCS Connected and Available!");
-                                notifyStateChanged(STATE_REGISTERED, null);
-                            }
-
-                            @Override
-                            public void onError() {
-                                LogUtil.e(TAG, "Platform IMS RCS error");
-                            }
-                        });
-                    }
+            int subId = SubscriptionManager.getDefaultSmsSubscriptionId();
+            if (subId == SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
+                subId = SubscriptionManager.getDefaultDataSubscriptionId();
+            }
+            if (subId == SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
+                final SubscriptionManager subMgr = mContext.getSystemService(SubscriptionManager.class);
+                if (subMgr != null && subMgr.getActiveSubscriptionInfoList() != null
+                        && !subMgr.getActiveSubscriptionInfoList().isEmpty()) {
+                    subId = subMgr.getActiveSubscriptionInfoList().get(0).getSubscriptionId();
                 }
+            }
+
+            final ImsRcsManager rcsManager = imsManager.getImsRcsManager(subId);
+            if (rcsManager == null) return;
+            LogUtil.i(TAG, "Platform ImsRcsManager detected for subId: " + subId);
+
+            final RcsUceAdapter uceAdapter = rcsManager.getUceAdapter();
+            if (uceAdapter != null) {
+                LogUtil.i(TAG, "RcsUceAdapter active for capability exchange");
+                mPlatformUceAdapter = uceAdapter;
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                rcsManager.registerImsStateCallback(mContext.getMainExecutor(), new ImsStateCallback() {
+                    @Override
+                    public void onUnavailable(int reason) {
+                        LogUtil.w(TAG, "Platform IMS RCS unavailable, reason: " + reason);
+                    }
+
+                    @Override
+                    public void onAvailable() {
+                        LogUtil.i(TAG, "Platform IMS RCS available; starting transport");
+                        SipDelegateTransport.getInstance(mContext).ensureStarted();
+                    }
+
+                    @Override
+                    public void onError() {
+                        LogUtil.e(TAG, "Platform IMS RCS error");
+                    }
+                });
             }
         } catch (Exception e) {
             LogUtil.w(TAG, "Platform ImsRcsManager check failed: " + e.getMessage());
         }
-    }
-
-    public AcsConfig getAcsConfig() {
-        return mAcsConfig;
-    }
-
-    public synchronized SipStackManager getSipStackManager() {
-        if (mSipStackManager == null) {
-            final AcsConfig config = (mAcsConfig != null) ? mAcsConfig : AcsConfig.createDefaultConfig();
-            mSipStackManager = new SipStackManager(mContext, config);
-            mSipStackManager.connectAndRegister();
-            LogUtil.i(TAG, "Lazy-initialized SipStackManager with P-CSCF: " + config.getPCscfAddress());
-        }
-        return mSipStackManager;
     }
 
     public RcsUceAdapter getPlatformUceAdapter() {

@@ -34,10 +34,5 @@
         android:summary="@string/rcs_settings_read_receipts_summary"
         android:defaultValue="true" />
 
-    <EditTextPreference
-        android:key="pref_key_rcs_custom_acs_url"
-        android:title="@string/rcs_settings_custom_acs_title"
-        android:summary="@string/rcs_settings_custom_acs_summary"
-        android:dialogTitle="@string/rcs_settings_custom_acs_title" />
 
 </PreferenceScreen>

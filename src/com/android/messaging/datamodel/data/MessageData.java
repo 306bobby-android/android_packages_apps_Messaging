@@ -310,15 +310,23 @@ public class MessageData implements Parcelable {
     }
 
     /**
-     * Create an incoming RCS message
+     * Create an incoming RCS message.
+     *
+     * <p>Mirrors {@link #createReceivedSmsMessage}: the conversation and participant ids are
+     * required, since {@code insertNewMessageInTransaction} and the conversation metadata update
+     * both dereference them.
      */
-    public static MessageData createRcsMessage(final String senderUri, final String messageText,
-            final long timestamp, final String rcsMessageId) {
+    public static MessageData createReceivedRcsMessage(final String conversationId,
+            final String participantId, final String selfId, final String messageText,
+            final long sent, final long received) {
         final MessageData message = new MessageData();
+        message.mConversationId = conversationId;
+        message.mParticipantId = participantId;
+        message.mSelfId = selfId;
         message.mProtocol = PROTOCOL_RCS;
         message.mStatus = BUGLE_STATUS_INCOMING_COMPLETE;
-        message.mReceivedTimestamp = timestamp;
-        message.mSentTimestamp = timestamp;
+        message.mReceivedTimestamp = received;
+        message.mSentTimestamp = sent;
         message.mParts.add(MessagePartData.createTextMessagePart(messageText));
         message.mSeen = false;
         message.mRead = false;

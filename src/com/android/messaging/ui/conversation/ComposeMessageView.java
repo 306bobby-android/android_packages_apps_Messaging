@@ -731,15 +731,19 @@ public class ComposeMessageView extends LinearLayout
         if (attachmentCount == 0) {
             boolean isRecipientRcs = false;
             String dest = null;
-            if (RcsManager.getInstance(getContext()).isRcsAvailable()
+            // Discovery is gated on capability exchange being available, not on the messaging
+            // transport: the capability cache should keep filling even when we cannot send over
+            // RCS. The UI only claims RCS when a transport exists to honour the claim.
+            if (RcsManager.getInstance(getContext()).isCapabilityDiscoveryAvailable()
                     && mConversationDataModel != null && mConversationDataModel.isBound()) {
                 final ParticipantData other = mConversationDataModel.getData().getParticipants().getOtherParticipant();
                 if (other != null) {
                     dest = other.getNormalizedDestination();
                     LogUtil.i("ComposeMessageView", "RCS check for dest=" + dest);
                     if (com.android.messaging.rcs.uce.CapabilityDiscoveryManager.onRecipientSelected(getContext(), dest)) {
-                        isRecipientRcs = true;
-                        LogUtil.i("ComposeMessageView", "Recipient " + dest + " IS RCS capable — switching to RCS mode");
+                        isRecipientRcs = RcsManager.getInstance(getContext()).isRcsAvailable();
+                        LogUtil.i("ComposeMessageView", "Recipient " + dest + " IS RCS capable; "
+                                + "transport available=" + isRecipientRcs);
                     } else {
                         LogUtil.i("ComposeMessageView", "Recipient " + dest + " is NOT RCS or UNKNOWN — staying in SMS mode");
                     }

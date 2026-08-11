@@ -122,7 +122,7 @@ public class BugleApplication extends Application implements UncaughtExceptionHa
         Trace.beginSection("app.initializeAsync");
         maybeHandleSharedPrefsUpgrade(factory);
         MmsConfig.load();
-        RcsManager.getInstance(factory.getApplicationContext()).startProvisioning();
+        RcsManager.getInstance(factory.getApplicationContext()).initialize();
         Trace.endSection();
     }
 
