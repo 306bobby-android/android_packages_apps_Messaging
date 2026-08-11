@@ -362,8 +362,9 @@ public class SendMessageAction extends Action implements Parcelable {
                 messageBox = Mms.MESSAGE_BOX_ALL;
                 break;
         }
+        final boolean isSmsOrRcs = isSms || message.getIsRcs();
         // First in the telephony DB
-        if (isSms) {
+        if (isSmsOrRcs) {
             // Ignore update message Uri
             if (type != Sms.MESSAGE_TYPE_ALL) {
                 if (!MmsUtils.updateSmsMessageSendingStatus(context, message.getSmsMessageUri(),
@@ -374,18 +375,10 @@ public class SendMessageAction extends Action implements Parcelable {
             }
         } else if (message.getSmsMessageUri() != null) {
             if (messageBox != Mms.MESSAGE_BOX_ALL) {
-                if (isSms || isRcs) {
-                    if (!MmsUtils.updateSmsMessageSendingStatus(context, message.getSmsMessageUri(),
-                            type, message.getReceivedTimeStamp())) {
-                        message.markMessageFailed(message.getSentTimeStamp());
-                        updatedTelephony = false;
-                    }
-                } else {
-                    if (!MmsUtils.updateMmsMessageSendingStatus(context, message.getSmsMessageUri(),
-                            messageBox, message.getReceivedTimeStamp())) {
-                        message.markMessageFailed(message.getSentTimeStamp());
-                        updatedTelephony = false;
-                    }
+                if (!MmsUtils.updateMmsMessageSendingStatus(context, message.getSmsMessageUri(),
+                        messageBox, message.getReceivedTimeStamp())) {
+                    message.markMessageFailed(message.getSentTimeStamp());
+                    updatedTelephony = false;
                 }
             }
         }
