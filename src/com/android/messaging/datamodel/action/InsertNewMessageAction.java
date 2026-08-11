@@ -22,7 +22,9 @@ import android.net.Uri;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.provider.Telephony;
-import android.text.TextUtils;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
 
 import androidx.annotation.NonNull;
 
@@ -482,9 +484,7 @@ public class InsertNewMessageAction extends Action implements Parcelable {
         if (messageUri != null && !TextUtils.isEmpty(messageUri.toString())) {
             db.beginTransaction();
             try {
-                message = MessageData.createRcsMessage(recipient, messageText, timestamp, UUID.randomUUID().toString());
-                message.bindConversationId(conversationId);
-                message.bindSelfId(content.getSelfId());
+                message = MessageData.createDraftRcsMessage(conversationId, content.getSelfId(), messageText);
                 message.updateSendingMessage(conversationId, messageUri, timestamp);
                 BugleDatabaseOperations.insertNewMessageInTransaction(db, message);
                 BugleDatabaseOperations.updateConversationMetadataInTransaction(db,
