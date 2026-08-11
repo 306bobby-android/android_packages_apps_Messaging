@@ -172,19 +172,23 @@ public class CapabilityDiscoveryManager {
                                     for (Object capObj : capabilitiesList) {
                                         if (capObj == null) continue;
                                         try {
-                                            String contactDest = null;
-                                            try {
-                                                final Method getUriMethod = capObj.getClass().getMethod("getContactHeader");
-                                                final Uri headerUri = (Uri) getUriMethod.invoke(capObj);
-                                                if (headerUri != null) contactDest = headerUri.getSchemeSpecificPart();
-                                            } catch (Exception ignored) {}
+                                            if (contactDest == null) {
+                                                for (Method m : capObj.getClass().getMethods()) {
+                                                    if (m.getReturnType().equals(Uri.class) && m.getParameterTypes().length == 0) {
+                                                        try {
+                                                            final Uri u = (Uri) m.invoke(capObj);
+                                                            if (u != null) {
+                                                                contactDest = u.getSchemeSpecificPart();
+                                                                break;
+                                                            }
+                                                        } catch (Exception ignored) {}
+                                                    }
+                                                }
+                                            }
 
-                                            boolean isCapable = true;
-                                            try {
-                                                final Method isCapableMethod = capObj.getClass().getMethod("isCapable", int.class);
-                                                final Boolean capRes = (Boolean) isCapableMethod.invoke(capObj, 1);
-                                                if (capRes != null) isCapable = capRes;
-                                            } catch (Exception ignored) {}
+                                            if (contactDest == null && !uris.isEmpty()) {
+                                                contactDest = uris.get(0).getSchemeSpecificPart();
+                                            }
 
                                             if (contactDest != null) {
                                                 final int resCap = isCapable ? CAPABILITY_RCS_SUPPORTED : CAPABILITY_NOT_SUPPORTED;
