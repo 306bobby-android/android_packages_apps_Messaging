@@ -19,11 +19,19 @@ package com.android.messaging.rcs.uce;
 import android.content.ContentValues;
 import android.content.Context;
 import android.database.Cursor;
+import android.net.Uri;
+import android.os.Build;
+import android.telephony.ims.RcsContactUceCapability;
+import android.telephony.ims.RcsUceAdapter;
+import android.text.TextUtils;
 
 import com.android.messaging.datamodel.DatabaseHelper;
 import com.android.messaging.datamodel.DatabaseWrapper;
 import com.android.messaging.datamodel.DataModel;
+import com.android.messaging.rcs.RcsManager;
 import com.android.messaging.util.LogUtil;
+
+import java.util.Collections;
 
 /**
  * User Capability Exchange (UCE) Manager for contact RCS discovery & caching.
@@ -36,6 +44,25 @@ public class CapabilityDiscoveryManager {
     public static final int CAPABILITY_NOT_SUPPORTED = 2;
 
     private static final long CAPABILITY_CACHE_VALIDITY_MS = 24 * 60 * 60 * 1000L; // 24 hours
+
+    /**
+     * Checks if a destination phone number is an RCS recipient.
+     */
+    public static boolean isRcsRecipient(Context context, String destination) {
+        if (TextUtils.isEmpty(destination)) {
+            return false;
+        }
+        final int cap = getCachedCapability(context, destination);
+        if (cap == CAPABILITY_RCS_SUPPORTED) {
+            return true;
+        }
+        if (cap == CAPABILITY_NOT_SUPPORTED) {
+            return false;
+        }
+        // If unknown, trigger platform capability discovery asynchronously
+        requestPlatformCapabilityDiscovery(context, destination);
+        return false; // Default to false (SMS) until confirmed RCS
+    }
 
     /**
      * Checks cached capability status for destination phone number.
@@ -63,6 +90,37 @@ public class CapabilityDiscoveryManager {
             if (cursor != null) cursor.close();
         }
         return CAPABILITY_UNKNOWN;
+    }
+
+    /**
+     * Triggers asynchronous RCS capability discovery for destination via platform RcsUceAdapter.
+     */
+    public static void requestPlatformCapabilityDiscovery(Context context, String destination) {
+        if (TextUtils.isEmpty(destination)) return;
+        try {
+            final RcsUceAdapter uceAdapter = RcsManager.getInstance(context).getPlatformUceAdapter();
+            if (uceAdapter != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                final Uri contactUri = Uri.parse("tel:" + destination);
+                uceAdapter.requestAvailability(contactUri, context.getMainExecutor(), new RcsUceAdapter.CapabilitiesCallback() {
+                    @Override
+                    public void onCapabilitiesReceived(RcsContactUceCapability capabilities) {
+                        final boolean rcsSupported = capabilities.getCapabilityMechanism() == RcsContactUceCapability.CAPABILITY_MECHANISM_OPTIONS
+                                || capabilities.isCapable(RcsContactUceCapability.FEATURE_TAG_CHAT_IM);
+                        final int resultCap = rcsSupported ? CAPABILITY_RCS_SUPPORTED : CAPABILITY_NOT_SUPPORTED;
+                        updateCapability(context, destination, resultCap);
+                        LogUtil.i(TAG, "Platform UCE capabilities received for " + destination + ": rcsSupported=" + rcsSupported);
+                    }
+
+                    @Override
+                    public void onError(int errorCode, long retryAfterMilliseconds) {
+                        LogUtil.w(TAG, "Platform UCE discovery error for " + destination + ": " + errorCode);
+                        updateCapability(context, destination, CAPABILITY_NOT_SUPPORTED);
+                    }
+                });
+            }
+        } catch (Exception e) {
+            LogUtil.w(TAG, "Platform UCE request failed: " + e.getMessage());
+        }
     }
 
     /**

@@ -729,8 +729,22 @@ public class ComposeMessageView extends LinearLayout
         // Update the text hint on the message box depending on the attachment type.
         final int attachmentCount = attachments.size();
         if (attachmentCount == 0) {
-            final boolean isRcs = RcsManager.getInstance(getContext()).isRcsAvailable();
-            if (isRcs) {
+            boolean isRecipientRcs = false;
+            if (RcsManager.getInstance(getContext()).isRcsAvailable()
+                    && mConversationDataModel != null && mConversationDataModel.isBound()) {
+                final List<ParticipantData> otherParticipants = mConversationDataModel.getData().getOtherParticipants();
+                if (otherParticipants != null && !otherParticipants.isEmpty()) {
+                    for (ParticipantData p : otherParticipants) {
+                        final String dest = p.getNormalizedDestination();
+                        if (com.android.messaging.rcs.uce.CapabilityDiscoveryManager.isRcsRecipient(getContext(), dest)) {
+                            isRecipientRcs = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (isRecipientRcs) {
                 mComposeEditText.setHint(R.string.compose_message_view_hint_text_rcs);
             } else {
                 final SubscriptionListEntry subscriptionListEntry =

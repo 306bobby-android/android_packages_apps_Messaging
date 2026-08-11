@@ -166,6 +166,13 @@ public class ContactListItemView extends LinearLayout implements OnClickListener
         } else {
             mAlphabetHeaderTextView.setVisibility(GONE);
         }
+
+        final String destination = mData.getDestination();
+        final boolean isRcs = com.android.messaging.rcs.uce.CapabilityDiscoveryManager.isRcsRecipient(getContext(), destination);
+        final float alpha = isRcs ? 1.0f : 0.65f;
+        mContactNameTextView.setAlpha(alpha);
+        mContactDetailsTextView.setAlpha(alpha);
+        mContactDetailTypeTextView.setAlpha(alpha);
     }
 
     /**
