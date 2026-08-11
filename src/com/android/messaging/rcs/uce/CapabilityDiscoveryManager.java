@@ -362,29 +362,39 @@ public class CapabilityDiscoveryManager {
                 );
 
                 Method reqMethod = null;
-                boolean isBatch = true;
-                try {
-                    reqMethod = uceAdapter.getClass().getMethod("requestCapabilities", Collection.class, Executor.class, callbackClass);
-                } catch (Exception e1) {
+                boolean useRequestAvailability = false;
+                if (uris.size() == 1) {
                     try {
-                        reqMethod = uceAdapter.getClass().getMethod("requestCapabilities", List.class, Executor.class, callbackClass);
-                    } catch (Exception e2) {
+                        reqMethod = uceAdapter.getClass().getMethod("requestAvailability", Uri.class, Executor.class, callbackClass);
+                        useRequestAvailability = true;
+                        LogUtil.i(TAG, "Single contact query — using RcsUceAdapter.requestAvailability()");
+                    } catch (Exception ignored) {}
+                }
+
+                if (reqMethod == null) {
+                    try {
+                        reqMethod = uceAdapter.getClass().getMethod("requestCapabilities", Collection.class, Executor.class, callbackClass);
+                    } catch (Exception e1) {
                         try {
-                            reqMethod = uceAdapter.getClass().getMethod("requestAvailability", Uri.class, Executor.class, callbackClass);
-                            isBatch = false;
-                        } catch (Exception ignored) {}
+                            reqMethod = uceAdapter.getClass().getMethod("requestCapabilities", List.class, Executor.class, callbackClass);
+                        } catch (Exception e2) {
+                            try {
+                                reqMethod = uceAdapter.getClass().getMethod("requestAvailability", Uri.class, Executor.class, callbackClass);
+                                useRequestAvailability = true;
+                            } catch (Exception ignored) {}
+                        }
                     }
                 }
 
                 if (reqMethod != null) {
-                    if (isBatch) {
-                        reqMethod.invoke(uceAdapter, uris, context.getMainExecutor(), callbackProxy);
-                        LogUtil.i(TAG, "Successfully executed batch UCE requestCapabilities for " + uris.size() + " URIs");
-                    } else {
+                    if (useRequestAvailability) {
                         for (Uri u : uris) {
                             reqMethod.invoke(uceAdapter, u, context.getMainExecutor(), callbackProxy);
+                            LogUtil.i(TAG, "Successfully executed UCE requestAvailability for URI: " + u);
                         }
-                        LogUtil.i(TAG, "Successfully executed UCE requestAvailability for " + uris.size() + " URIs");
+                    } else {
+                        reqMethod.invoke(uceAdapter, uris, context.getMainExecutor(), callbackProxy);
+                        LogUtil.i(TAG, "Successfully executed batch UCE requestCapabilities for " + uris.size() + " URIs");
                     }
                 } else {
                     LogUtil.w(TAG, "No compatible UCE method found on RcsUceAdapter");
