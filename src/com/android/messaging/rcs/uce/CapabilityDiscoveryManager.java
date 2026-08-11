@@ -107,10 +107,12 @@ public class CapabilityDiscoveryManager {
                 final DatabaseWrapper db = DataModel.get().getDatabase();
                 Cursor cursor = null;
                 try {
+                    final String digits = normalized.replaceAll("[^0-9]", "");
+                    final String suffix = digits.length() >= 10 ? digits.substring(digits.length() - 10) : digits;
                     cursor = db.query(DatabaseHelper.PARTICIPANTS_TABLE,
                             new String[] { DatabaseHelper.ParticipantColumns.RCS_CAPABILITY, DatabaseHelper.ParticipantColumns.RCS_DISCOVERY_TIMESTAMP },
-                            DatabaseHelper.ParticipantColumns.NORMALIZED_DESTINATION + "=? OR " + DatabaseHelper.ParticipantColumns.DISPLAY_DESTINATION + "=?",
-                            new String[] { normalized, destination }, null, null, null);
+                            DatabaseHelper.ParticipantColumns.NORMALIZED_DESTINATION + " LIKE ? OR " + DatabaseHelper.ParticipantColumns.DISPLAY_DESTINATION + " LIKE ?",
+                            new String[] { "%" + suffix, "%" + suffix }, null, null, null);
 
                     if (cursor != null && cursor.moveToFirst()) {
                         final int capability = cursor.getInt(0);
@@ -288,9 +290,11 @@ public class CapabilityDiscoveryManager {
                 values.put(DatabaseHelper.ParticipantColumns.RCS_CAPABILITY, capability);
                 values.put(DatabaseHelper.ParticipantColumns.RCS_DISCOVERY_TIMESTAMP, System.currentTimeMillis());
 
+                final String digits = normalized.replaceAll("[^0-9]", "");
+                final String suffix = digits.length() >= 10 ? digits.substring(digits.length() - 10) : digits;
                 final int updatedRows = db.update(DatabaseHelper.PARTICIPANTS_TABLE, values,
-                        DatabaseHelper.ParticipantColumns.NORMALIZED_DESTINATION + "=? OR " + DatabaseHelper.ParticipantColumns.DISPLAY_DESTINATION + "=?",
-                        new String[] { normalized, destination });
+                        DatabaseHelper.ParticipantColumns.NORMALIZED_DESTINATION + " LIKE ? OR " + DatabaseHelper.ParticipantColumns.DISPLAY_DESTINATION + " LIKE ?",
+                        new String[] { "%" + suffix, "%" + suffix });
 
                 LogUtil.i(TAG, "Updated RCS capability in database for " + normalized + " to: " + capability + " (rows updated=" + updatedRows + ")");
             } catch (Exception e) {
