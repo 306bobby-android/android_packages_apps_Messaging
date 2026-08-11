@@ -98,6 +98,7 @@ public class SipStackManager {
                 if (mUseUdp) {
                     LogUtil.i(TAG, "Initializing SIPoUDP DatagramSocket to " + mTargetAddress.getHostAddress());
                     mUdpSocket = new DatagramSocket();
+                    bindSocketToCellularOrIms(mUdpSocket);
                     mUdpSocket.connect(mTargetAddress, mTargetPort);
                     mUdpSocket.setSoTimeout(15000);
                     mIsConnected.set(true);
@@ -110,6 +111,7 @@ public class SipStackManager {
                     } else {
                         mTcpSocket = new Socket();
                     }
+                    bindSocketToCellularOrIms(mTcpSocket);
                     mTcpSocket.connect(new InetSocketAddress(mTargetAddress, mTargetPort), 10000);
                     mInputStream = mTcpSocket.getInputStream();
                     mOutputStream = mTcpSocket.getOutputStream();
@@ -126,6 +128,40 @@ public class SipStackManager {
                 mIsConnected.set(false);
             }
         }).start();
+    }
+
+    private void bindSocketToCellularOrIms(DatagramSocket socket) {
+        try {
+            final ConnectivityManager cm = (ConnectivityManager) mContext.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return;
+            for (Network network : cm.getAllNetworks()) {
+                final NetworkCapabilities caps = cm.getNetworkCapabilities(network);
+                if (caps != null && (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_IMS) || caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR))) {
+                    network.bindSocket(socket);
+                    LogUtil.i(TAG, "Bound DatagramSocket to cellular/IMS network interface: " + network);
+                    return;
+                }
+            }
+        } catch (Exception e) {
+            LogUtil.w(TAG, "Failed to bind UDP socket to cellular/IMS network", e);
+        }
+    }
+
+    private void bindSocketToCellularOrIms(Socket socket) {
+        try {
+            final ConnectivityManager cm = (ConnectivityManager) mContext.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return;
+            for (Network network : cm.getAllNetworks()) {
+                final NetworkCapabilities caps = cm.getNetworkCapabilities(network);
+                if (caps != null && (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_IMS) || caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR))) {
+                    network.bindSocket(socket);
+                    LogUtil.i(TAG, "Bound TCP socket to cellular/IMS network interface: " + network);
+                    return;
+                }
+            }
+        } catch (Exception e) {
+            LogUtil.w(TAG, "Failed to bind TCP socket to cellular/IMS network", e);
+        }
     }
 
     private static InetAddress[] resolveOverCellular(Context context, String host) {
