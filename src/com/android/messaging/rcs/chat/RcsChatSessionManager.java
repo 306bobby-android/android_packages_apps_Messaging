@@ -290,6 +290,7 @@ public class RcsChatSessionManager
         mSessionsByBranch.put(branch, session);
         h.append("Max-Forwards: 70\r\n");
         appendRoute(h, config, session);
+        appendSecurityVerify(h, config);
         h.append("From: <").append(config.localAor()).append(">;tag=")
                 .append(session.getLocalTag()).append("\r\n");
         h.append("To: <").append(session.getRemoteUri()).append(">\r\n");
@@ -347,6 +348,7 @@ public class RcsChatSessionManager
         appendVia(h, config);
         h.append("Max-Forwards: 70\r\n");
         appendRoute(h, config, session);
+        appendSecurityVerify(h, config);
         h.append("From: <").append(config.localAor()).append(">;tag=")
                 .append(session.getLocalTag()).append("\r\n");
         h.append("To: ").append(response.getFirst("to")).append("\r\n");
@@ -368,6 +370,7 @@ public class RcsChatSessionManager
         appendVia(h, config);
         h.append("Max-Forwards: 70\r\n");
         appendRoute(h, config, session);
+        appendSecurityVerify(h, config);
         h.append("From: <").append(config.localAor()).append(">;tag=")
                 .append(session.getLocalTag()).append("\r\n");
         h.append("To: <").append(session.getRemoteUri()).append(">");
@@ -408,6 +411,16 @@ public class RcsChatSessionManager
                 .append(";branch=").append(branch)
                 .append(";rport\r\n");
         return branch;
+    }
+
+    /**
+     * RFC 3329 security agreement. Omitting it draws 494 Security Agreement Required from the
+     * P-CSCF, which rejects the request before it reaches the far end.
+     */
+    private void appendSecurityVerify(StringBuilder h, SipConfigSnapshot config) {
+        if (!TextUtils.isEmpty(config.securityVerifyHeader)) {
+            h.append("Security-Verify: ").append(config.securityVerifyHeader).append("\r\n");
+        }
     }
 
     private void appendRoute(StringBuilder h, SipConfigSnapshot config, RcsChatSession session) {

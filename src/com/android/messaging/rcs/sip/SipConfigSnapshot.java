@@ -51,6 +51,16 @@ public final class SipConfigSnapshot {
     public final InetSocketAddress sipServerAddress;
     public final int maxUdpPayloadSizeBytes;
 
+    /**
+     * Value for the {@code Security-Verify} header (RFC 3329).
+     *
+     * <p>The P-CSCF negotiated an IPsec security association during registration and rejects any
+     * request that does not echo it, with {@code 494 Security Agreement Required}. The association
+     * belongs to the ImsService, so this value has to be taken from the delegate configuration
+     * rather than reconstructed.
+     */
+    public final String securityVerifyHeader;
+
     private SipConfigSnapshot(Object config) {
         version = readLong(config, "getVersion", -1);
         transportType = (int) readLong(config, "getTransportType", SIP_TRANSPORT_TCP);
@@ -66,6 +76,20 @@ public final class SipConfigSnapshot {
         localAddress = (InetSocketAddress) read(config, "getLocalAddress");
         sipServerAddress = (InetSocketAddress) read(config, "getSipServerAddress");
         maxUdpPayloadSizeBytes = (int) readLong(config, "getMaxUdpPayloadSizeBytes", 0);
+        securityVerifyHeader = readSecurityVerifyHeader(config);
+    }
+
+    private static String readSecurityVerifyHeader(Object config) {
+        final Object ipSec = read(config, "getIpSecConfiguration");
+        if (ipSec == null) return null;
+        try {
+            final Object header = ipSec.getClass()
+                    .getMethod("getSipSecurityVerifyHeader").invoke(ipSec);
+            return (header instanceof String) ? (String) header : null;
+        } catch (Throwable t) {
+            LogUtil.w(TAG, "getSipSecurityVerifyHeader unavailable: " + t);
+            return null;
+        }
     }
 
     /** @return a snapshot, or null if {@code config} is null or unreadable. */
@@ -199,6 +223,7 @@ public final class SipConfigSnapshot {
                 + ", local=" + localAddress
                 + ", server=" + sipServerAddress
                 + ", gruu=" + publicGruuUri
-                + ", serviceRoute=" + serviceRouteHeader + "}";
+                + ", serviceRoute=" + serviceRouteHeader
+                + ", securityVerify=" + securityVerifyHeader + "}";
     }
 }
