@@ -35,6 +35,7 @@ import com.android.messaging.util.PhoneUtils;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
@@ -202,12 +203,33 @@ public class CapabilityDiscoveryManager {
                         }
                 );
 
+                Method reqMethod = null;
+                boolean isBatch = true;
                 try {
-                    final Method reqCaps = uceAdapter.getClass().getMethod("requestCapabilities", List.class, Executor.class, callbackClass);
-                    reqCaps.invoke(uceAdapter, uris, context.getMainExecutor(), callbackProxy);
-                    LogUtil.i(TAG, "Successfully executed batch UCE requestCapabilities for " + uris.size() + " URIs");
-                } catch (Exception e) {
-                    LogUtil.w(TAG, "Batch UCE method invocation failed: " + e.getMessage());
+                    reqMethod = uceAdapter.getClass().getMethod("requestCapabilities", Collection.class, Executor.class, callbackClass);
+                } catch (Exception e1) {
+                    try {
+                        reqMethod = uceAdapter.getClass().getMethod("requestCapabilities", List.class, Executor.class, callbackClass);
+                    } catch (Exception e2) {
+                        try {
+                            reqMethod = uceAdapter.getClass().getMethod("requestAvailability", Uri.class, Executor.class, callbackClass);
+                            isBatch = false;
+                        } catch (Exception ignored) {}
+                    }
+                }
+
+                if (reqMethod != null) {
+                    if (isBatch) {
+                        reqMethod.invoke(uceAdapter, uris, context.getMainExecutor(), callbackProxy);
+                        LogUtil.i(TAG, "Successfully executed batch UCE requestCapabilities for " + uris.size() + " URIs");
+                    } else {
+                        for (Uri u : uris) {
+                            reqMethod.invoke(uceAdapter, u, context.getMainExecutor(), callbackProxy);
+                        }
+                        LogUtil.i(TAG, "Successfully executed UCE requestAvailability for " + uris.size() + " URIs");
+                    }
+                } else {
+                    LogUtil.w(TAG, "No compatible UCE method found on RcsUceAdapter");
                 }
             } catch (Exception e) {
                 LogUtil.w(TAG, "Batch UCE discovery failed: " + e.getMessage());
