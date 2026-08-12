@@ -47,11 +47,14 @@ public class CpimParser {
         sb.append("From: <").append(fromSipUri).append(">\r\n");
         sb.append("To: <").append(toSipUri).append(">\r\n");
         sb.append("DateTime: ").append(timestamp).append("\r\n");
-        sb.append("NS: imdn <http://www.gsma.com/rcs/imdn/>\r\n");
+        // RFC 5438 defines the IMDN namespace as urn:ietf:params:imdn. The http://www.gsma.com/
+        // form previously used here is not a namespace any receiver recognises, so the
+        // imdn.* headers below were meaningless to the far end.
+        sb.append("NS: imdn <urn:ietf:params:imdn>\r\n");
         sb.append("imdn.Message-ID: ").append(msgId).append("\r\n");
         sb.append("imdn.Disposition-Notification: positive-delivery, display\r\n");
         sb.append("\r\n");
-        sb.append("Content-type: text/plain; charset=utf-8\r\n");
+        sb.append("Content-Type: text/plain; charset=utf-8\r\n");
         sb.append("\r\n");
         sb.append(textContent);
 

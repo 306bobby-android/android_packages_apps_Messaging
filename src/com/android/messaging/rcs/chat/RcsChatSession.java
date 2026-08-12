@@ -420,8 +420,14 @@ public class RcsChatSession {
             }
             if (next == null) return;
 
+            // The CPIM To must be the recipient's own address. mRemoteUri is a request URI in
+            // *our* home domain (sip:+1...@msg.pc.t-mobile.com), which misidentifies anyone on
+            // another carrier — the recipient here is on AT&T. A tel URI is carrier-neutral and is
+            // what an interworking gateway can route on.
+            final String cpimTo = toTelUri(mRemoteUri);
+            LogUtil.i(TAG, "CPIM From=" + localAor + " To=" + cpimTo);
             final String cpim = com.android.messaging.rcs.sip.CpimParser.formatCpimMessage(
-                    localAor, mRemoteUri, next.messageId, next.text);
+                    localAor, cpimTo, next.messageId, next.text);
             final boolean ok = mMsrp.sendMessage(next.messageId, "message/cpim",
                     cpim.getBytes(StandardCharsets.UTF_8));
             if (mCallback != null) {
@@ -485,6 +491,23 @@ public class RcsChatSession {
     }
 
     // ---------------------------------------------------------------- helpers
+
+    /** Reduces a SIP or tel URI to a carrier-neutral {@code tel:+E164} form. */
+    static String toTelUri(String uri) {
+        if (uri == null) return null;
+        String s = uri.trim();
+        if (s.startsWith("<") && s.endsWith(">")) s = s.substring(1, s.length() - 1);
+        if (s.startsWith("sip:") || s.startsWith("sips:") || s.startsWith("tel:")) {
+            s = s.substring(s.indexOf(':') + 1);
+        }
+        final int at = s.indexOf('@');
+        if (at >= 0) s = s.substring(0, at);
+        final int semi = s.indexOf(';');
+        if (semi >= 0) s = s.substring(0, semi);
+        final String digits = s.replaceAll("[^0-9+]", "");
+        if (digits.isEmpty()) return uri;
+        return digits.startsWith("+") ? "tel:" + digits : "tel:+" + digits;
+    }
 
     private static String buildMsrpPath(String localIp, int port, String sessionId) {
         final String host = SipConfigSnapshot.formatHost(localIp);
