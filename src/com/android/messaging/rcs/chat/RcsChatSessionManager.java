@@ -203,6 +203,14 @@ public class RcsChatSessionManager
             if (contact != null) session.setRemoteTarget(contact);
             session.setRouteSet(reverse(headers.getAll("record-route")));
             sendAck(session, headers);
+        } else if (status >= 300) {
+            // A rejection is as much a reason to try another Request-URI form as an outright send
+            // failure is. Until now only onSipSendFailure reached the fallback list, so a 480 for
+            // a tel URI killed the session without ever attempting the sip: spellings.
+            LogUtil.i(TAG, "INVITE rejected with " + status
+                    + (headers.getFirst("reason") != null
+                            ? " (" + headers.getFirst("reason") + ")" : ""));
+            if (session.retryWithNextRequestUri()) return true;
         }
         session.onInviteResponse(status, getConfig(), body);
         return true;
@@ -292,7 +300,7 @@ public class RcsChatSessionManager
         h.append("Max-Forwards: 70\r\n");
         appendRoute(h, config, session);
         appendSecurityVerify(h, config);
-        h.append("From: <").append(config.localAor()).append(">;tag=")
+        h.append("From: <").append(config.originatingAor(mContext)).append(">;tag=")
                 .append(session.getLocalTag()).append("\r\n");
         h.append("To: <").append(session.getRemoteUri()).append(">\r\n");
         h.append("Call-ID: ").append(session.getCallId()).append("\r\n");
@@ -302,7 +310,7 @@ public class RcsChatSessionManager
                 .append(';').append(RcsChatSession.ICSI_CHAT_SESSION).append("\r\n");
         h.append("Accept-Contact: *;").append(RcsChatSession.ICSI_CHAT_SESSION)
                 .append(";require;explicit\r\n");
-        h.append("P-Preferred-Identity: <").append(config.localAor()).append(">\r\n");
+        h.append("P-Preferred-Identity: <").append(config.originatingAor(mContext)).append(">\r\n");
         h.append("Allow: INVITE, ACK, CANCEL, BYE, OPTIONS, UPDATE, MESSAGE, NOTIFY\r\n");
         h.append("Supported: timer, gruu, path\r\n");
         h.append("Session-Expires: 1800\r\n");
@@ -350,7 +358,7 @@ public class RcsChatSessionManager
         h.append("Max-Forwards: 70\r\n");
         appendRoute(h, config, session);
         appendSecurityVerify(h, config);
-        h.append("From: <").append(config.localAor()).append(">;tag=")
+        h.append("From: <").append(config.originatingAor(mContext)).append(">;tag=")
                 .append(session.getLocalTag()).append("\r\n");
         h.append("To: ").append(response.getFirst("to")).append("\r\n");
         h.append("Call-ID: ").append(session.getCallId()).append("\r\n");
@@ -372,7 +380,7 @@ public class RcsChatSessionManager
         h.append("Max-Forwards: 70\r\n");
         appendRoute(h, config, session);
         appendSecurityVerify(h, config);
-        h.append("From: <").append(config.localAor()).append(">;tag=")
+        h.append("From: <").append(config.originatingAor(mContext)).append(">;tag=")
                 .append(session.getLocalTag()).append("\r\n");
         h.append("To: <").append(session.getRemoteUri()).append(">");
         if (session.getRemoteTag() != null) h.append(";tag=").append(session.getRemoteTag());

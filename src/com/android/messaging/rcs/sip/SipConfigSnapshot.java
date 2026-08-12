@@ -51,6 +51,12 @@ public final class SipConfigSnapshot {
     public final InetSocketAddress sipServerAddress;
     public final int maxUdpPayloadSizeBytes;
 
+    /** Raw {@code P-Associated-URI} header value returned at registration, if the vendor set it. */
+    public final String associatedUriHeader;
+
+    /** Lazily resolved by {@link #originatingAor}, which needs a Context the constructor lacks. */
+    private volatile String mOriginatingAor;
+
     /**
      * Value for the {@code Security-Verify} header (RFC 3329).
      *
@@ -77,6 +83,7 @@ public final class SipConfigSnapshot {
         sipServerAddress = (InetSocketAddress) read(config, "getSipServerAddress");
         maxUdpPayloadSizeBytes = (int) readLong(config, "getMaxUdpPayloadSizeBytes", 0);
         securityVerifyHeader = readSecurityVerifyHeader(config);
+        associatedUriHeader = readString(config, "getSipAssociatedUriHeader");
     }
 
     private static String readSecurityVerifyHeader(Object config) {
@@ -186,6 +193,107 @@ public final class SipConfigSnapshot {
         }
     }
 
+    /**
+     * The identity to originate SIP requests as, in {@code From} and {@code P-Preferred-Identity}.
+     *
+     * <p>{@link #localAor()} returns {@code getPublicUserIdentifier()}, which on this carrier is
+     * the IMSI-derived default public identity
+     * ({@code sip:310260…@ims.mnc260.mcc310.3gppnetwork.org}). Registration associates several
+     * public identities, and that one is the wrong choice for a messaging session: the network
+     * takes the asserted identity at face value rather than substituting a trusted one, so the
+     * application server sees an originator that is not a subscriber MSISDN and cannot resolve an
+     * RCS service profile for it. Observed directly — a message sent with the IMSI identity came
+     * back through SMS interworking stamped {@code +310260124967160}, which is the IMSI with a
+     * {@code +} in front of it, not a dialable number.
+     *
+     * <p>Preference order is the E.164 identity in the messaging domain, then any E.164 SIP
+     * identity, then a tel URI, then one constructed from the subscription number. The
+     * IMSI identity is used only if nothing else is available. Ordering matters beyond
+     * correctness: the associated-URI set on this network also contains a malformed entry
+     * ({@code …3gppnetwork.orgCC_NO_ERROR}), and preferring the messaging domain skips it.
+     */
+    public String originatingAor(android.content.Context context) {
+        final String cached = mOriginatingAor;
+        if (cached != null) return cached;
+
+        final java.util.List<String> uris = parseUriList(associatedUriHeader);
+        String best = null;
+        for (String uri : uris) {
+            if (!isE164SipUri(uri)) continue;
+            if (homeDomain != null && domainOf(uri).equalsIgnoreCase(homeDomain)) {
+                best = uri;
+                break;
+            }
+            if (best == null) best = uri;
+        }
+        if (best == null) {
+            for (String uri : uris) {
+                if (uri.startsWith("tel:+") && isDialable(uri.substring(4))) {
+                    best = uri;
+                    break;
+                }
+            }
+        }
+        if (best == null) {
+            // Shannon does not always plumb P-Associated-URI into SipDelegateConfiguration, so
+            // build the same identity from the subscription number rather than give up on it.
+            final String tel = localTelUri(context);
+            if (tel != null && homeDomain != null) {
+                best = "sip:" + tel.substring(4) + "@" + homeDomain;
+            }
+        }
+        if (best == null) best = localAor();
+
+        LogUtil.i(TAG, "Originating identity: " + best
+                + " (public identity is " + publicUserIdentifier + ")");
+        mOriginatingAor = best;
+        return best;
+    }
+
+    /** Splits a comma-separated header into the URIs inside its angle brackets. */
+    private static java.util.List<String> parseUriList(String header) {
+        final java.util.List<String> out = new java.util.ArrayList<>();
+        if (header == null || header.isEmpty()) return out;
+        final java.util.regex.Matcher m =
+                java.util.regex.Pattern.compile("<([^>]+)>").matcher(header);
+        while (m.find()) {
+            final String uri = m.group(1).trim();
+            if (!uri.isEmpty()) out.add(uri);
+        }
+        if (out.isEmpty()) {
+            for (String part : header.split(",")) {
+                final String uri = part.trim();
+                if (!uri.isEmpty()) out.add(uri);
+            }
+        }
+        return out;
+    }
+
+    /** True for {@code sip:+<digits>@<host>}, the dialable form of a public identity. */
+    private static boolean isE164SipUri(String uri) {
+        if (uri == null || !uri.startsWith("sip:")) return false;
+        final int at = uri.indexOf('@');
+        if (at < 0) return false;
+        return isDialable(uri.substring(4, at));
+    }
+
+    private static boolean isDialable(String user) {
+        if (user == null || !user.startsWith("+") || user.length() < 8) return false;
+        for (int i = 1; i < user.length(); i++) {
+            if (!Character.isDigit(user.charAt(i))) return false;
+        }
+        return true;
+    }
+
+    private static String domainOf(String uri) {
+        final int at = uri.indexOf('@');
+        if (at < 0) return "";
+        String domain = uri.substring(at + 1);
+        final int semi = domain.indexOf(';');
+        if (semi >= 0) domain = domain.substring(0, semi);
+        return domain;
+    }
+
     /** The address-of-record used in From/To headers. */
     public String localAor() {
         final String id = stripScheme(publicUserIdentifier);
@@ -259,6 +367,7 @@ public final class SipConfigSnapshot {
                 + ", server=" + sipServerAddress
                 + ", gruu=" + publicGruuUri
                 + ", serviceRoute=" + serviceRouteHeader
+                + ", associatedUris=" + associatedUriHeader
                 + ", securityVerify=" + securityVerifyHeader + "}";
     }
 }

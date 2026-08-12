@@ -169,9 +169,13 @@ public class RcsChatSession {
         }
         mRequestUriIndex++;
         mRemoteUri = mRequestUriCandidates.get(mRequestUriIndex);
-        mLocalCSeq = 1;
+        // The sequence number must keep climbing. Restarting it at 1 reused the Call-ID, From tag
+        // and CSeq of the attempt that just failed, which is precisely a retransmission of that
+        // INVITE — the proxy matches the completed transaction and replays its rejection instead
+        // of routing the new Request-URI. Harmless while this path was only reached for a start
+        // line the ImsService never transmitted; not harmless now that a 480 reaches it.
         mState = State.IDLE;
-        LogUtil.i(TAG, "Start line rejected; retrying with Request-URI form "
+        LogUtil.i(TAG, "Retrying with Request-URI form "
                 + (mRequestUriIndex + 1) + "/" + mRequestUriCandidates.size() + ": " + mRemoteUri);
         start();
         return true;
@@ -420,7 +424,9 @@ public class RcsChatSession {
         // this carrier is IMSI-derived and cannot be attributed or fallen back to.
         String localAor = SipConfigSnapshot.localTelUri(mContext);
         if (localAor == null) {
-            localAor = config != null ? config.localAor() : "sip:anonymous@invalid";
+            // Still not the raw IMPU: originatingAor() picks a dialable associated identity and
+            // only falls back to the IMSI form when the network offered nothing better.
+            localAor = config != null ? config.originatingAor(mContext) : "sip:anonymous@invalid";
         }
         LogUtil.i(TAG, "CPIM From: " + localAor);
 
