@@ -125,6 +125,17 @@ public class RcsChatSession {
     /** Derives the alternative Request-URI spellings from the primary one. */
     private void buildRequestUriCandidates(String primary) {
         mRequestUriCandidates.add(primary);
+        // Derive the sip: spellings as fallbacks when the primary is a tel URI.
+        if (primary != null && primary.startsWith("tel:")) {
+            final SipConfigSnapshot cfg = mTransport.getConfig();
+            final String domain = (cfg != null) ? cfg.homeDomain : null;
+            if (domain != null) {
+                final String user = primary.substring(4);
+                addCandidate("sip:" + user + "@" + domain + ";user=phone");
+                addCandidate("sip:" + user + "@" + domain);
+            }
+            return;
+        }
         if (primary == null || !primary.startsWith("sip:")) return;
 
         final String withoutScheme = primary.substring(4);
@@ -135,7 +146,7 @@ public class RcsChatSession {
         final int semi = domain.indexOf(';');
         if (semi >= 0) domain = domain.substring(0, semi);
 
-        addCandidate("tel:" + user);
+        addCandidate("sip:" + user + "@" + domain + ";user=phone");
         addCandidate("sip:" + user + "@" + domain);
     }
 

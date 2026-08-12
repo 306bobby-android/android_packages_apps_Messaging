@@ -164,8 +164,9 @@ public class RcsChatSessionManager
         final RcsChatSession session =
                 (viaBranch != null) ? mSessionsByBranch.remove(viaBranch) : null;
         if (session == null) return;
-        if (reason == SipDelegateTransport.FAILURE_INVALID_START_LINE
-                && session.retryWithNextRequestUri()) {
+        if (session.retryWithNextRequestUri()) {
+            // Any refusal is worth retrying in another URI form, not just a malformed start
+            // line: the network may simply dislike how the target was addressed.
             return;
         }
         session.terminate("ImsService rejected the request (reason " + reason + ")");
@@ -464,12 +465,16 @@ public class RcsChatSessionManager
         if (trimmed.startsWith("sip:") || trimmed.startsWith("sips:") || trimmed.startsWith("tel:")) {
             return trimmed;
         }
-        if (TextUtils.isEmpty(homeDomain)) return null;
-
         final String e164 = com.android.messaging.rcs.uce.CapabilityDiscoveryManager
                 .normalizeDestination(context, trimmed);
         if (TextUtils.isEmpty(e164)) return null;
-        return "sip:" + e164 + "@" + homeDomain + ";user=phone";
+        // A tel URI, not sip:<number>@<our home domain>. The latter asserts the target is a
+        // subscriber of our own messaging domain, which is false for anyone on another carrier:
+        // the core then resolves them locally, finds no RCS registration, and store-and-forwards
+        // to SMS without ever attempting an interworking lookup. Every message so far — on-net
+        // and off — came back from the gateway rather than a recipient, which is what that looks
+        // like. A tel URI leaves the resolution to the network.
+        return "tel:" + e164;
     }
 
     private static String normalizeUri(String uri) {
