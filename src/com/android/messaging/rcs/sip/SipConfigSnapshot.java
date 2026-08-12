@@ -151,6 +151,41 @@ public final class SipConfigSnapshot {
         return at >= 0 ? bare.substring(0, at) : bare;
     }
 
+    /**
+     * The originator address for end-to-end headers, as a tel URI.
+     *
+     * <p>{@link #localAor()} returns the registered public identity, which on this carrier is
+     * derived from the IMSI ({@code sip:310260…@ims.mnc260.mcc310.3gppnetwork.org}). That is fine
+     * for SIP signalling, where the network asserts the real identity, but it is wrong for CPIM:
+     * those headers travel end to end, and both the receiving client and any interworking or
+     * SMS-fallback gateway need a dialable originator. A message sent with an IMSI URI is accepted
+     * by the network and then has no sender it can attribute or fall back to.
+     *
+     * @return {@code tel:+1XXXXXXXXXX}, or null if the subscription number is unavailable
+     */
+    public static String localTelUri(android.content.Context context) {
+        try {
+            final android.telephony.SubscriptionManager sm =
+                    context.getSystemService(android.telephony.SubscriptionManager.class);
+            if (sm == null) return null;
+            final int subId = android.telephony.SubscriptionManager.getDefaultSmsSubscriptionId();
+            if (!android.telephony.SubscriptionManager.isValidSubscriptionId(subId)) return null;
+
+            final String number = sm.getPhoneNumber(subId);
+            if (number == null || number.trim().isEmpty()) {
+                LogUtil.w(TAG, "Subscription number unavailable; CPIM will fall back to the IMPU");
+                return null;
+            }
+            final String digits = number.replaceAll("[^0-9+]", "");
+            if (digits.isEmpty()) return null;
+            return digits.startsWith("+") ? "tel:" + digits
+                    : (digits.length() == 10 ? "tel:+1" + digits : "tel:+" + digits);
+        } catch (Throwable t) {
+            LogUtil.w(TAG, "Could not read subscription number: " + t);
+            return null;
+        }
+    }
+
     /** The address-of-record used in From/To headers. */
     public String localAor() {
         final String id = stripScheme(publicUserIdentifier);

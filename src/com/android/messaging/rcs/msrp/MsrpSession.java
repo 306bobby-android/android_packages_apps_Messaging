@@ -222,6 +222,12 @@ public class MsrpSession {
             write(MsrpChunk.buildSend(tx, mRemotePath, mLocalPath, messageId, contentType, body, true));
             LogUtil.i(TAG, "MSRP SEND dispatched, messageId=" + messageId
                     + " bytes=" + (body == null ? 0 : body.length));
+            // The peer here is the carrier's CPM server, not the recipient's device. Logging the
+            // body is the only way to see what the far end was actually asked to deliver.
+            if (body != null && body.length > 0 && body.length < 4096) {
+                LogUtil.i(TAG, "[OUTBOUND CPIM]\n"
+                        + new String(body, StandardCharsets.UTF_8));
+            }
             return true;
         } catch (Exception e) {
             LogUtil.e(TAG, "MSRP send failed", e);

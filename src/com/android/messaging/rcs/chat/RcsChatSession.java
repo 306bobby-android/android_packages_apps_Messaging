@@ -405,7 +405,13 @@ public class RcsChatSession {
     private void flushPending() {
         if (mMsrp == null || !mMsrp.isOpen()) return;
         final SipConfigSnapshot config = mTransport.getConfig();
-        final String localAor = config != null ? config.localAor() : "sip:anonymous@invalid";
+        // Prefer the dialable identity: CPIM headers are end to end, and the registered IMPU on
+        // this carrier is IMSI-derived and cannot be attributed or fallen back to.
+        String localAor = SipConfigSnapshot.localTelUri(mContext);
+        if (localAor == null) {
+            localAor = config != null ? config.localAor() : "sip:anonymous@invalid";
+        }
+        LogUtil.i(TAG, "CPIM From: " + localAor);
 
         while (true) {
             final Pending next;
