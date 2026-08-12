@@ -28,8 +28,6 @@ import android.telephony.ims.RcsUceAdapter;
 
 import com.android.messaging.rcs.chat.RcsChatSessionManager;
 import com.android.messaging.rcs.sip.SipDelegateTransport;
-import com.android.messaging.rcs.uce.RcsProvisioningTweaker;
-import com.android.messaging.rcs.uce.UceMechanismConfigurator;
 import com.android.messaging.util.LogUtil;
 
 import java.util.ArrayList;
@@ -130,11 +128,6 @@ public class RcsManager {
      */
     public void initialize() {
         LogUtil.i(TAG, "Initializing RCS transport...");
-        // Presence discovery cannot see this carrier's RCS users; move the platform to OPTIONS.
-        UceMechanismConfigurator.applyIfNeeded(mContext);
-        // The vendor stack picks its own discovery mechanism from the provisioning document, so
-        // the carrier config switch above is only half of it.
-        RcsProvisioningTweaker.startWatching(mContext);
         notifyStateChanged(STATE_CONNECTING, null);
 
         final SipDelegateTransport transport = SipDelegateTransport.getInstance(mContext);
