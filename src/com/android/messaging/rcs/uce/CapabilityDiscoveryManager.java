@@ -104,6 +104,22 @@ public class CapabilityDiscoveryManager {
         }
     }
 
+    /**
+     * Contacts waiting to be discovered, coalesced so one request carries several URIs.
+     *
+     * <p>The vendor only takes its resource-list subscription path when handed more than one URI;
+     * a single-URI request always becomes an individual subscription. Batching is therefore what
+     * makes {@link GroupSubscribeConfigurator} have any effect, besides being fewer requests.
+     */
+    private static final java.util.LinkedHashSet<String> sPendingBatch = new java.util.LinkedHashSet<>();
+    private static final java.util.concurrent.ScheduledExecutorService sBatchTimer =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+    private static java.util.concurrent.ScheduledFuture<?> sPendingFlush;
+    /** How long to wait for more contacts before sending. Short enough to feel immediate. */
+    private static final long BATCH_WINDOW_MS = 700;
+    /** The platform serialises these; do not build an unservable request. */
+    private static final int MAX_BATCH_SIZE = 8;
+
     private static final ArrayMap<String, CachedCapability> sCapabilityCache = new ArrayMap<>();
     private static final ArrayMap<String, Long> sLastDiscoveryMap = new ArrayMap<>();
     private static final ArrayMap<String, Long> sInFlightRequests = new ArrayMap<>();
@@ -618,12 +634,34 @@ public class CapabilityDiscoveryManager {
     }
 
     /**
-     * Triggers asynchronous RCS capability discovery via platform Telephony RcsUceAdapter for single contact.
+     * Queues a contact for discovery, coalescing contacts requested close together into one
+     * request so the resource-list subscription path is reachable.
      */
     public static void requestPlatformCapabilityDiscovery(Context context, String destination) {
-        final List<String> singleList = new ArrayList<>();
-        singleList.add(destination);
-        requestBatchCapabilityDiscovery(context, singleList);
+        if (TextUtils.isEmpty(destination)) return;
+        final Context appContext = context.getApplicationContext();
+        final boolean flushNow;
+        synchronized (sPendingBatch) {
+            sPendingBatch.add(destination);
+            flushNow = sPendingBatch.size() >= MAX_BATCH_SIZE;
+            if (sPendingFlush != null) sPendingFlush.cancel(false);
+            sPendingFlush = flushNow ? null
+                    : sBatchTimer.schedule(() -> flushPendingBatch(appContext),
+                            BATCH_WINDOW_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+        }
+        if (flushNow) flushPendingBatch(appContext);
+    }
+
+    private static void flushPendingBatch(Context context) {
+        final List<String> batch;
+        synchronized (sPendingBatch) {
+            if (sPendingBatch.isEmpty()) return;
+            batch = new ArrayList<>(sPendingBatch);
+            sPendingBatch.clear();
+            sPendingFlush = null;
+        }
+        LogUtil.i(TAG, "Flushing discovery batch of " + batch.size() + ": " + batch);
+        requestBatchCapabilityDiscovery(context, batch);
     }
 
     /**

@@ -28,6 +28,7 @@ import android.telephony.ims.RcsUceAdapter;
 
 import com.android.messaging.rcs.chat.RcsChatSessionManager;
 import com.android.messaging.rcs.sip.SipDelegateTransport;
+import com.android.messaging.rcs.uce.GroupSubscribeConfigurator;
 import com.android.messaging.util.LogUtil;
 
 import java.util.ArrayList;
@@ -128,6 +129,9 @@ public class RcsManager {
      */
     public void initialize() {
         LogUtil.i(TAG, "Initializing RCS transport...");
+        // Reach the vendor's resource-list subscription path, which individual per-contact
+        // subscription never exercises.
+        GroupSubscribeConfigurator.applyIfNeeded(mContext);
         notifyStateChanged(STATE_CONNECTING, null);
 
         final SipDelegateTransport transport = SipDelegateTransport.getInstance(mContext);
