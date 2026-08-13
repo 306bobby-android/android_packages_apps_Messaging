@@ -55,6 +55,8 @@ public class SipDelegateTransport {
     private static final String CLS_MESSAGE_CALLBACK =
             "android.telephony.ims.stub.DelegateConnectionMessageCallback";
     private static final String CLS_SIP_MESSAGE = "android.telephony.ims.SipMessage";
+    private static final String CLS_DELEGATE_CONNECTION =
+            "android.telephony.ims.SipDelegateConnection";
 
     /**
      * Feature tags we ask for. This carrier grants session-mode chat and file transfer and denies
@@ -171,6 +173,14 @@ public class SipDelegateTransport {
     private volatile long mConfigVersion = -1;
     private volatile Set<String> mRegisteredTags = Collections.emptySet();
     private volatile boolean mCreatePending;
+    private volatile boolean mConfigRecoveryAttempted;
+
+    /** Grace period for a configuration to arrive on its own before forcing a re-registration. */
+    private static final long CONFIG_WAIT_BEFORE_RECOVERY_MS = 6_000L;
+    /** Gap between destroying and recreating, so the ImsService sees the tags actually leave. */
+    private static final long RECREATE_DELAY_MS = 1_500L;
+
+    public static final int SIP_DELEGATE_DESTROY_REASON_REQUESTED_BY_APP = 2;
 
     private SipDelegateTransport(Context context) {
         mContext = context.getApplicationContext();
@@ -296,6 +306,67 @@ public class SipDelegateTransport {
 
     // ---------------------------------------------------------------- state callbacks
 
+    /**
+     * Forces a real IMS re-registration when the delegate comes up without a configuration.
+     *
+     * <p>The ImsService caches the last configuration it saw and hands it to a newly created
+     * delegate. That cache is empty after the service or this process restarts, and it is only
+     * refilled by an actual re-registration. Whether one happens is decided by comparing the tags
+     * our delegate wants against the tags already registered — and when this process is replaced,
+     * the dead one's tags are still registered, so the new delegate looks like "no change", no
+     * re-registration occurs, and the cache is never refilled:
+     *
+     * <pre>
+     *   updateSipDelegateRegistration, no change in registration bitmask
+     *   triggerLatestDelegateConfigUpdate
+     *   triggerLatestDelegateConfiguration, missing valid config
+     * </pre>
+     *
+     * <p>The delegate then sits with its feature tags registered and no configuration, which is
+     * indistinguishable from being ready and cannot send anything. Destroying it drops the tags
+     * from the registration; creating it again re-adds them, and that difference is what makes the
+     * ImsService re-register and produce a configuration. Done once per process, and only when a
+     * configuration has genuinely failed to arrive.
+     */
+    private void scheduleConfigRecovery() {
+        if (mConfigVersion >= 0 || mConfigRecoveryAttempted || !isChatReady()) return;
+        mConfigRecoveryAttempted = true;
+        sCallbackExecutor.execute(() -> {
+            try {
+                Thread.sleep(CONFIG_WAIT_BEFORE_RECOVERY_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            if (mConfigVersion >= 0) return;
+            final Object connection = mDelegateConnection;
+            if (connection == null) return;
+            LogUtil.w(TAG, "No SipDelegateConfiguration " + CONFIG_WAIT_BEFORE_RECOVERY_MS
+                    + "ms after registration; recreating the delegate to force one");
+            try {
+                mSipDelegateManager.getClass()
+                        .getMethod("destroySipDelegate", Class.forName(CLS_DELEGATE_CONNECTION),
+                                int.class)
+                        .invoke(mSipDelegateManager, connection,
+                                SIP_DELEGATE_DESTROY_REASON_REQUESTED_BY_APP);
+            } catch (Throwable t) {
+                LogUtil.e(TAG, "destroySipDelegate failed: " + describe(t));
+                return;
+            }
+            // onDestroyed clears the connection; give the ImsService a moment to deregister the
+            // tags before asking for them back, or it sees no net change and skips the register.
+            try {
+                Thread.sleep(RECREATE_DELAY_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            // Via ensureStarted so this collapses with any concurrent start attempt rather than
+            // racing it into two delegates.
+            ensureStarted();
+        });
+    }
+
     /** Wakes anything that deferred a send because the transport was not usable yet. */
     private void notifyTransportReady() {
         if (!isSendable()) return;
@@ -325,6 +396,7 @@ public class SipDelegateTransport {
                 }
                 LogUtil.i(TAG, "chatReady=" + isChatReady());
                 notifyTransportReady();
+                scheduleConfigRecovery();
                 break;
             case "onConfigurationChanged":
                 mConfiguration = (args != null && args.length > 0) ? args[0] : null;
