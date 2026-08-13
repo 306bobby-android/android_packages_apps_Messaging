@@ -36,6 +36,16 @@ import java.util.UUID;
 public class RcsSendMessageDelegate {
     private static final String TAG = "RcsSendMessageDelegate";
 
+    /**
+     * How long to wait for the message to reach the network.
+     *
+     * <p>A cold session needs an INVITE round trip and an MSRP connection, and this carrier's
+     * INVITE has taken close to a second before now. The session's own INVITE timeout is 32s, so
+     * this sits just past it: whichever fires first, the message ends up with a real verdict
+     * rather than an assumed one.
+     */
+    private static final long SEND_TIMEOUT_MS = 35_000L;
+
     public static int sendRcsMessage(Context context, MessageData message, String recipient) {
         final String text = message.getMessageText();
         if (TextUtils.isEmpty(recipient) || TextUtils.isEmpty(text)) {
@@ -46,16 +56,25 @@ public class RcsSendMessageDelegate {
         final String rcsMessageId = UUID.randomUUID().toString();
         LogUtil.i(TAG, "sendRcsMessage: recipient=" + recipient + " messageId=" + rcsMessageId);
 
-        final boolean accepted = RcsChatSessionManager.getInstance(context)
-                .sendText(recipient, rcsMessageId, text);
+        final RcsChatSessionManager manager = RcsChatSessionManager.getInstance(context);
+        final boolean accepted = manager.sendText(recipient, rcsMessageId, text);
         if (!accepted) {
             LogUtil.w(TAG, "sendRcsMessage: chat transport rejected the message; falling back");
             return MessageData.BUGLE_STATUS_OUTGOING_FAILED;
         }
 
-        // The message is queued on a chat session. Delivery is confirmed asynchronously by MSRP
-        // and, later, IMDN; this status only reflects that the transport took ownership.
-        LogUtil.i(TAG, "sendRcsMessage: accepted by chat session");
+        // Queuing is not sending. The session may still be negotiating, and the ImsService reports
+        // its refusals asynchronously — a rejected INVITE arrives well after this method used to
+        // have returned OUTGOING_COMPLETE. Messages the network never accepted were stored as sent
+        // and shown without an error, which is how a message that reached nobody looked delivered.
+        // SendMessageAction already runs off the main thread, so waiting here is safe.
+        final boolean sent = manager.awaitSendOutcome(rcsMessageId, SEND_TIMEOUT_MS);
+        if (!sent) {
+            LogUtil.w(TAG, "sendRcsMessage: not transmitted; reporting failure so the caller "
+                    + "can fall back");
+            return MessageData.BUGLE_STATUS_OUTGOING_FAILED;
+        }
+        LogUtil.i(TAG, "sendRcsMessage: transmitted over MSRP");
         return MessageData.BUGLE_STATUS_OUTGOING_COMPLETE;
     }
 }

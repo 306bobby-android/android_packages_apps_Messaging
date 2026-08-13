@@ -156,6 +156,33 @@ public class RcsChatSession {
         }
     }
 
+    /** How many times a session will wait out a temporary transport failure before giving up. */
+    static final int MAX_TRANSPORT_RETRIES = 3;
+
+    private int mTransportRetries;
+
+    /**
+     * Records that the request was refused for a passing reason and the session should wait.
+     *
+     * @return true if another attempt is allowed once the transport recovers
+     */
+    boolean deferUntilTransportReady() {
+        cancelInviteTimeout();
+        if (mTransportRetries >= MAX_TRANSPORT_RETRIES) return false;
+        mTransportRetries++;
+        mState = State.IDLE;
+        return true;
+    }
+
+    /** Re-sends the INVITE unchanged, for a failure that was about the transport, not the request. */
+    void retrySameRequestUri() {
+        cancelInviteTimeout();
+        mState = State.IDLE;
+        LogUtil.i(TAG, "Resending INVITE to " + mRemoteUri + " (transport retry "
+                + mTransportRetries + "/" + MAX_TRANSPORT_RETRIES + ")");
+        start();
+    }
+
     /**
      * Switches to the next Request-URI spelling after a rejected start line.
      *

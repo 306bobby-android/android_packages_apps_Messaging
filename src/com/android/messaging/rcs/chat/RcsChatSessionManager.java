@@ -26,6 +26,7 @@ import com.android.messaging.rcs.sip.SipHeaders;
 import com.android.messaging.util.LogUtil;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -56,6 +57,9 @@ public class RcsChatSessionManager
     private final Map<String, SipHeaders> mInboundInvites = new ConcurrentHashMap<>();
     /** Via branch of each in-flight request, so send outcomes can be routed to their session. */
     private final Map<String, RcsChatSession> mSessionsByBranch = new ConcurrentHashMap<>();
+    /** Sessions whose request was refused for a passing reason, waiting for the transport back. */
+    private final java.util.Set<RcsChatSession> mDeferredSessions =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     private final RcsChatSession.Callback mSessionCallback = new RcsChatSession.Callback() {
         @Override
@@ -83,13 +87,56 @@ public class RcsChatSessionManager
         @Override
         public void onMessageSent(RcsChatSession session, String messageId) {
             LogUtil.i(TAG, "Message handed to MSRP: " + messageId);
+            settle(messageId, true);
         }
 
         @Override
         public void onMessageFailed(RcsChatSession session, String messageId, String reason) {
             LogUtil.w(TAG, "Message failed: " + messageId + " (" + reason + ")");
+            settle(messageId, false);
         }
     };
+
+    /**
+     * Outcome latches for messages whose sender is waiting on the result.
+     *
+     * <p>Handing a message to a chat session is not evidence it was sent: the session may still be
+     * negotiating, and the ImsService reports its refusals asynchronously. Reporting success at
+     * hand-off meant a message the network never accepted was stored as
+     * {@code OUTGOING_COMPLETE} and shown to the user as sent, with no error and nothing delivered.
+     */
+    private final Map<String, java.util.concurrent.CompletableFuture<Boolean>> mPendingOutcomes =
+            new ConcurrentHashMap<>();
+
+    private void settle(String messageId, boolean sent) {
+        final java.util.concurrent.CompletableFuture<Boolean> outcome =
+                (messageId != null) ? mPendingOutcomes.remove(messageId) : null;
+        if (outcome != null) outcome.complete(sent);
+    }
+
+    /**
+     * Blocks until the message reaches the network or fails.
+     *
+     * @param timeoutMs how long to wait; a session that is still coming up needs an INVITE round
+     *                  trip and an MSRP connection, so this is seconds rather than milliseconds
+     * @return true if the message was transmitted
+     */
+    public boolean awaitSendOutcome(String messageId, long timeoutMs) {
+        final java.util.concurrent.CompletableFuture<Boolean> outcome =
+                mPendingOutcomes.get(messageId);
+        if (outcome == null) return false;
+        try {
+            return outcome.get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            LogUtil.w(TAG, "Timed out waiting for send outcome of " + messageId);
+            return false;
+        } catch (Exception e) {
+            LogUtil.w(TAG, "Interrupted waiting for send outcome of " + messageId + ": " + e);
+            return false;
+        } finally {
+            mPendingOutcomes.remove(messageId);
+        }
+    }
 
     private RcsChatSessionManager(Context context) {
         mContext = context.getApplicationContext();
@@ -118,8 +165,15 @@ public class RcsChatSessionManager
      * @return true if the message was accepted for delivery. Delivery itself is asynchronous.
      */
     public boolean sendText(String destination, String messageId, String text) {
-        if (mTransport == null || !mTransport.isChatReady()) {
-            LogUtil.w(TAG, "sendText: chat transport not ready");
+        // Registration and configuration are both required. The delegate reports its feature tags
+        // and its configuration through separate callbacks, and the ImsService only pushes a
+        // configuration on an actual IMS re-registration — so a delegate created between
+        // registrations is granted, reports its tags, and has no configuration for minutes.
+        // Checking the tags alone let sends through in exactly that window.
+        if (mTransport == null || !mTransport.isSendable()) {
+            LogUtil.w(TAG, "sendText: transport not sendable (chatReady="
+                    + (mTransport != null && mTransport.isChatReady()) + ", config="
+                    + (getConfig() != null) + ")");
             return false;
         }
         final SipConfigSnapshot config = getConfig();
@@ -140,6 +194,7 @@ public class RcsChatSessionManager
             mSessionsByCallId.put(session.getCallId(), session);
             mSessionsByRemote.put(normalizeUri(remoteUri), session);
         }
+        mPendingOutcomes.put(messageId, new java.util.concurrent.CompletableFuture<>());
         session.enqueueText(messageId, text);
         return true;
     }
@@ -164,12 +219,41 @@ public class RcsChatSessionManager
         final RcsChatSession session =
                 (viaBranch != null) ? mSessionsByBranch.remove(viaBranch) : null;
         if (session == null) return;
+
+        // A temporary rejection says nothing about the request itself — the delegate was
+        // deregistered, the config had moved on, or the transport was mid-transition. Reformulating
+        // the Request-URI cannot help, and doing so used to consume every fallback and then abandon
+        // a message the network would have taken moments later. Hold it until the transport says it
+        // is usable again.
+        if (SipDelegateTransport.isTemporaryFailure(reason)) {
+            if (session.deferUntilTransportReady()) {
+                LogUtil.i(TAG, "Send deferred (" + reason + "); awaiting transport recovery: "
+                        + session.getCallId());
+                mDeferredSessions.add(session);
+                return;
+            }
+            session.terminate("transport unavailable after "
+                    + RcsChatSession.MAX_TRANSPORT_RETRIES + " attempts (reason " + reason + ")");
+            return;
+        }
+
         if (session.retryWithNextRequestUri()) {
-            // Any refusal is worth retrying in another URI form, not just a malformed start
-            // line: the network may simply dislike how the target was addressed.
+            // A rejection of the request as formed is worth retrying in another URI spelling: the
+            // network may simply dislike how the target was addressed.
             return;
         }
         session.terminate("ImsService rejected the request (reason " + reason + ")");
+    }
+
+    @Override
+    public void onSipTransportReady() {
+        if (mDeferredSessions.isEmpty()) return;
+        final List<RcsChatSession> waiting = new ArrayList<>(mDeferredSessions);
+        mDeferredSessions.clear();
+        for (RcsChatSession session : waiting) {
+            LogUtil.i(TAG, "Transport recovered; resending " + session.getCallId());
+            session.retrySameRequestUri();
+        }
     }
 
     @Override

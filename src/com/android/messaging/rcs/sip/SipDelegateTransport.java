@@ -89,12 +89,55 @@ public class SipDelegateTransport {
 
         /** The ImsService transmitted a message we sent. */
         default void onSipSendSuccess(String viaBranch) {}
+
+        /**
+         * The transport became usable again: a configuration arrived, or the chat feature tag
+         * returned to the registered set.
+         *
+         * <p>Sending requires both, and the ImsService rejects requests made without them as
+         * {@link #FAILURE_NOT_REGISTERED} or {@link #FAILURE_STALE_IMS_CONFIGURATION}, which it
+         * documents as temporary and retryable only once the corresponding callback has fired.
+         */
+        default void onSipTransportReady() {}
+    }
+
+    /**
+     * @return true if a request built now stands a chance: the delegate holds a configuration and
+     *         the chat feature tag is registered.
+     */
+    public boolean isSendable() {
+        return mDelegateConnection != null && mConfigVersion >= 0 && isChatReady();
     }
 
     // Mirrors SipDelegateManager.MESSAGE_FAILURE_REASON_*.
     public static final int FAILURE_INVALID_START_LINE = 3;
     public static final int FAILURE_INVALID_HEADER_FIELDS = 4;
     public static final int FAILURE_INVALID_BODY_CONTENT = 5;
+    public static final int FAILURE_NETWORK_NOT_AVAILABLE = 8;
+    public static final int FAILURE_NOT_REGISTERED = 9;
+    public static final int FAILURE_STALE_IMS_CONFIGURATION = 10;
+    public static final int FAILURE_INTERNAL_STATE_TRANSITION = 11;
+
+    /**
+     * Whether a rejection describes a passing condition rather than a bad request.
+     *
+     * <p>The platform documents each of these as temporary and says the request should be retried
+     * once the matching state callback has fired — not reformulated. Treating them like a malformed
+     * request instead, which this client used to do, spends the Request-URI fallbacks on a problem
+     * none of them addresses and then abandons a message the network would have accepted a second
+     * later.
+     */
+    public static boolean isTemporaryFailure(int reason) {
+        switch (reason) {
+            case FAILURE_NETWORK_NOT_AVAILABLE:
+            case FAILURE_NOT_REGISTERED:
+            case FAILURE_STALE_IMS_CONFIGURATION:
+            case FAILURE_INTERNAL_STATE_TRANSITION:
+                return true;
+            default:
+                return false;
+        }
+    }
 
     private static String failureReasonToString(int reason) {
         switch (reason) {
@@ -253,6 +296,18 @@ public class SipDelegateTransport {
 
     // ---------------------------------------------------------------- state callbacks
 
+    /** Wakes anything that deferred a send because the transport was not usable yet. */
+    private void notifyTransportReady() {
+        if (!isSendable()) return;
+        for (SipMessageListener listener : mListeners) {
+            try {
+                listener.onSipTransportReady();
+            } catch (Throwable t) {
+                LogUtil.e(TAG, "onSipTransportReady listener failed", t);
+            }
+        }
+    }
+
     private void handleStateCallback(String name, Object[] args) {
         switch (name) {
             case "onCreated":
@@ -269,6 +324,7 @@ public class SipDelegateTransport {
                     LogUtil.i(TAG, "Denied feature tags: " + args[1]);
                 }
                 LogUtil.i(TAG, "chatReady=" + isChatReady());
+                notifyTransportReady();
                 break;
             case "onConfigurationChanged":
                 mConfiguration = (args != null && args.length > 0) ? args[0] : null;
@@ -279,6 +335,7 @@ public class SipDelegateTransport {
                 // source rather than guessed at.
                 final SipConfigSnapshot snapshot = SipConfigSnapshot.from(mConfiguration);
                 if (snapshot != null) LogUtil.i(TAG, "  " + snapshot);
+                notifyTransportReady();
                 break;
             case "onDestroyed":
                 mCreatePending = false;
