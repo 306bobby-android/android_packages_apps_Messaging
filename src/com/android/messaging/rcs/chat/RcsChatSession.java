@@ -44,6 +44,14 @@ public class RcsChatSession {
     static final String ICSI_CHAT_SESSION =
             "+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.oma.cpm.session\"";
 
+    /**
+     * Feature tag an endpoint advertises to say it will interwork the session to SMS.
+     *
+     * <p>The carrier gateway puts this in the Contact of its 200 OK; it is what a Reject-Contact
+     * header names to keep the request away from it.
+     */
+    static final String FEATURE_TAG_MSG_FALLBACK = "+g.gsma.rcs.msgfallback";
+
     public enum State { IDLE, INVITING, ESTABLISHED, TERMINATING, CLOSED }
 
     /** A message queued before the MSRP session was ready. */

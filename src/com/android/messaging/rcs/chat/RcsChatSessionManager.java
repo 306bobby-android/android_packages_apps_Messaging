@@ -394,6 +394,17 @@ public class RcsChatSessionManager
                 .append(';').append(RcsChatSession.ICSI_CHAT_SESSION).append("\r\n");
         h.append("Accept-Contact: *;").append(RcsChatSession.ICSI_CHAT_SESSION)
                 .append(";require;explicit\r\n");
+        // RFC 3841: refuse to be routed to an endpoint that advertises SMS interworking.
+        //
+        // Every session so far has been answered by the carrier's own gateway rather than the
+        // recipient — the 200 OK carries Contact: <sip:sgc_c@…>;+g.gsma.rcs.msgfallback, and the
+        // message is store-and-forwarded as SMS. Accept-Contact cannot prevent that on its own,
+        // because the gateway satisfies it by advertising the chat ICSI itself and only then falls
+        // back internally. Excluding the fallback tag removes the gateway as a legal destination,
+        // so the network must either produce a route to the recipient or reject the request. Both
+        // outcomes are informative; today's silent downgrade is not.
+        h.append("Reject-Contact: *;").append(RcsChatSession.FEATURE_TAG_MSG_FALLBACK)
+                .append("\r\n");
         h.append("P-Preferred-Identity: <").append(config.originatingAor(mContext)).append(">\r\n");
         h.append("Allow: INVITE, ACK, CANCEL, BYE, OPTIONS, UPDATE, MESSAGE, NOTIFY\r\n");
         h.append("Supported: timer, gruu, path\r\n");

@@ -25,6 +25,7 @@ import android.os.Parcel;
 import android.os.Parcelable;
 import android.provider.Telephony.Mms;
 import android.provider.Telephony.Sms;
+import android.text.TextUtils;
 
 import androidx.annotation.NonNull;
 
@@ -210,11 +211,30 @@ public class SendMessageAction extends Action implements Parcelable {
         int status;
         int rawStatus = MessageData.RAW_TELEPHONY_STATUS_UNDEFINED;
         int resultCode = MessageData.UNKNOWN_RESULT_CODE;
+        boolean sentAsSmsFallback = false;
         if (isRcs) {
             final Context context = Factory.get().getApplicationContext();
             final String recipient = actionParameters.getString(KEY_RECIPIENT);
             final int rcsStatus = RcsSendMessageDelegate.sendRcsMessage(context, message, recipient);
-            status = (rcsStatus == MessageData.BUGLE_STATUS_OUTGOING_COMPLETE || rcsStatus == MessageData.BUGLE_STATUS_OUTGOING_DELIVERED) ? MmsUtils.MMS_REQUEST_SUCCEEDED : MmsUtils.MMS_REQUEST_MANUAL_RETRY;
+            if (rcsStatus == MessageData.BUGLE_STATUS_OUTGOING_COMPLETE
+                    || rcsStatus == MessageData.BUGLE_STATUS_OUTGOING_DELIVERED) {
+                status = MmsUtils.MMS_REQUEST_SUCCEEDED;
+            } else {
+                // RCS could not carry it. Retrying will not help — a resend keeps PROTOCOL_RCS and
+                // fails the same way — so deliver the text over SMS instead of leaving the user
+                // with a message that never arrives. The row is rewritten as SMS as part of this,
+                // because a message that travelled over SMS should not claim to be RCS.
+                LogUtil.i(TAG, "SendMessageAction: RCS failed for " + messageId
+                        + "; falling back to SMS");
+                final Uri smsUri = ensureSmsTelephonyRow(context, message, messageId, subId);
+                if (smsUri != null) {
+                    messageUri = smsUri;
+                }
+                status = MmsUtils.sendSmsMessage(recipient, message.getMessageText(), messageUri,
+                        subId, actionParameters.getString(KEY_SMS_SERVICE_CENTER),
+                        MmsUtils.isDeliveryReportRequired(subId));
+                sentAsSmsFallback = true;
+            }
         } else if (isSms) {
             Assert.notNull(messageUri);
             final String recipient = actionParameters.getString(KEY_RECIPIENT);
@@ -271,8 +291,54 @@ public class SendMessageAction extends Action implements Parcelable {
         // When we fast-fail before calling the MMS lib APIs (e.g. airplane mode,
         // sending message is deleted).
         ProcessSentMessageAction.processMessageSentFastFailed(messageId, messageUri,
-                updatedMessageUri, subId, isSms, status, rawStatus, resultCode);
+                updatedMessageUri, subId, isSms || sentAsSmsFallback, status, rawStatus,
+                resultCode);
         return null;
+    }
+
+    /**
+     * Gives a message that is falling back from RCS the telephony row an SMS needs.
+     *
+     * <p>An RCS message never got one: it was never going to travel through telephony. Without it
+     * the send status callback has nothing to update and the message does not appear in the SMS
+     * database at all. The protocol is rewritten at the same time, so the conversation shows what
+     * actually carried the message.
+     *
+     * @return the telephony URI, or the existing one if the message already had it
+     */
+    private Uri ensureSmsTelephonyRow(final Context context, final MessageData message,
+            final String messageId, final int subId) {
+        final Uri existing = message.getSmsMessageUri();
+        if (existing != null) return existing;
+
+        final DatabaseWrapper db = DataModel.get().getDatabase();
+        final String conversationId = message.getConversationId();
+        final long threadId = BugleDatabaseOperations.getThreadId(db, conversationId);
+        final ArrayList<String> recipients =
+                actionParameters.getStringArrayList(KEY_RECIPIENTS);
+        final String address = (recipients != null && !recipients.isEmpty())
+                ? TextUtils.join(" ", recipients)
+                : actionParameters.getString(KEY_RECIPIENT);
+
+        final Uri smsUri = MmsUtils.insertSmsMessage(context, Sms.CONTENT_URI, subId,
+                address, message.getMessageText(), message.getReceivedTimeStamp(),
+                Sms.STATUS_COMPLETE, Sms.MESSAGE_TYPE_SENT, threadId);
+        if (smsUri == null) {
+            LogUtil.w(TAG, "SendMessageAction: could not insert telephony row for SMS fallback");
+            return null;
+        }
+
+        db.beginTransaction();
+        try {
+            final ContentValues values = new ContentValues();
+            values.put(MessageColumns.SMS_MESSAGE_URI, smsUri.toString());
+            values.put(MessageColumns.PROTOCOL, MessageData.PROTOCOL_SMS);
+            BugleDatabaseOperations.updateMessageRow(db, messageId, values);
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
+        return smsUri;
     }
 
     private void updateMessageUri(final String messageId, final Uri updatedMessageUri) {
